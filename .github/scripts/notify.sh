@@ -20,8 +20,9 @@
 #
 # Fallback when none of those is set: GitHub's own email. The message is posted as a comment on one
 # open issue labelled `alerts` (created on first use), @mentioning NOTIFY_GITHUB_MENTIONS (repository
-# variable, e.g. "@alice @bob"; defaults to the repo owner). GitHub emails the people mentioned and
-# everyone subscribed to that issue. Needs GH_TOKEN with `issues: write`.
+# variable, e.g. "@alice @bob"; defaults to whoever triggered the run, because the repo owner is an
+# organization and mentioning it notifies nobody). GitHub emails the people mentioned and everyone
+# subscribed to that issue. Needs GH_TOKEN with `issues: write`.
 set -uo pipefail
 
 status="${NOTIFY_STATUS:-info}"
@@ -104,7 +105,7 @@ notify_github() {
       "Every push to develop/main, deploy result and rollback is posted here by GitHub Actions. **Subscribe to this issue** to get them all by email. People in the NOTIFY_GITHUB_MENTIONS repository variable are @mentioned on each one.")" || return 1
     issue="${issue##*/}"
   fi
-  mentions="${NOTIFY_GITHUB_MENTIONS:-@${GITHUB_REPOSITORY_OWNER:-}}"
+  mentions="${NOTIFY_GITHUB_MENTIONS:-@${GITHUB_ACTOR:-}}"
   # An "@name" inside a commit or PR title must not ping anyone: the body goes in a code block and
   # the title gets a zero-width space after each @
   safe_title="${title//@/@$'\u200b'}"

@@ -156,16 +156,18 @@ cat ~/.ssh/ci_deploy     # -> DEPLOY_SSH_KEY, then: rm ~/.ssh/ci_deploy ~/.ssh/c
 exit
 ```
 
-**5. Runner for this repo.** The runner already on the server (`deploy` user) belongs to the backend
-repo and can't take this repo's jobs. A repo admin opens *Settings → Actions → Runners → New
-self-hosted runner → Linux x64*, which shows the download commands and a token; run them as
-`webdeploy` with this name and label:
+**5. Runner for this repo.** The runner already on the server (`deploy` user) is registered to the
+backend repo alone (`karma-global/complymgmt_lite`) and can't take this repo's jobs. Don't re-register
+it for the whole organization to share it either: it runs as a member of the `docker` group (root in
+effect), which jobs from a public repo should never get. A repo admin opens *Settings → Actions →
+Runners → New self-hosted runner → Linux x64*, which shows the download commands and a token; run
+them as `webdeploy` with this name and label:
 
 ```bash
 sudo -iu webdeploy
 mkdir actions-runner-frontend && cd actions-runner-frontend
 # curl + tar lines from the GitHub page, then:
-./config.sh --url https://github.com/jahrupa/complymgmt_lite --token <TOKEN> \
+./config.sh --url https://github.com/karma-global/complymgmt_lite_frontend --token <TOKEN> \
   --name complymgmt-frontend-staging --labels complymgmt-frontend-staging --unattended
 exit
 cd /home/webdeploy/actions-runner-frontend && sudo ./svc.sh install webdeploy && sudo ./svc.sh start
@@ -263,10 +265,10 @@ whoever triggered it.
 
 **Nothing set? GitHub sends the email.** With none of the secrets above, each message is posted as a
 comment on one open issue labelled `alerts` ("🔔 Push and deploy alerts", created on first use) that
-@mentions the people in the repository variable `NOTIFY_GITHUB_MENTIONS` (e.g. `@jahrupa @alice`;
-defaults to the repo owner). GitHub emails everyone mentioned (their *Participating, @mentions* email
-setting, on by default) and everyone who subscribed to the issue, so teammates can just click
-*Subscribe* on it. The repo is public, so these comments are public too; they only hold what is
+@mentions the people in the repository variable `NOTIFY_GITHUB_MENTIONS` (e.g. `@alice @bob`;
+defaults to whoever triggered the run). GitHub emails everyone mentioned (their *Participating,
+@mentions* email setting, on by default) and everyone who subscribed to the issue, so teammates can
+just click *Subscribe* on it. The repo is public, so these comments are public too; they only hold what is
 already visible (commits, pusher, release ids, deploy results).
 
 GitHub's built-in emails still apply on top: whoever triggers a failed run gets an email (default
