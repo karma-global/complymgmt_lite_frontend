@@ -89,11 +89,12 @@ sudo chown deploy:deploy /var/www/complymgmt_lite
 #    nginx (user nginx / www-data) must be able to read it:
 sudo chmod 755 /var/www/complymgmt_lite
 
-# 2. A key just for CI (on your machine), authorised for the deploy user
-ssh-keygen -t ed25519 -N '' -C "github-actions complymgmt_lite <env>" -f ./complymgmt_lite_<env>
+# 2. A key just for CI (on your machine), authorised for the deploy user. ECDSA, not ed25519: a server
+#    in FIPS mode (like staging) rejects ed25519 keys without saying why ("Permission denied (publickey)")
+ssh-keygen -t ecdsa -b 256 -N '' -C "github-actions complymgmt_lite <env>" -f ./complymgmt_lite_<env>
 sudo -u deploy mkdir -p ~deploy/.ssh && sudo -u deploy chmod 700 ~deploy/.ssh
 cat ./complymgmt_lite_<env>.pub | sudo -u deploy tee -a ~deploy/.ssh/authorized_keys
-#    Optional hardening in authorized_keys: from="<runner IPs>",no-port-forwarding,no-pty ssh-ed25519 ...
+#    Optional hardening in authorized_keys: from="<runner IPs>",no-port-forwarding,no-pty ecdsa-sha2-nistp256 ...
 
 # 3. nginx site
 sudo cp deploy/nginx/complymgmt_lite.conf /etc/nginx/conf.d/complymgmt_lite.conf   # edit server_name/TLS/root
@@ -144,11 +145,13 @@ sudo cp ~/staging.conf /etc/nginx/conf.d/complymgmt_lite.conf
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-**4. SSH key for the runner** (runner and server are the same machine, so the key only works from localhost):
+**4. SSH key for the runner** (runner and server are the same machine, so the key only works from localhost).
+The server runs in FIPS mode (`cat /proc/sys/crypto/fips_enabled` → 1), so sshd accepts only ECDSA and
+RSA keys; an ed25519 key fails with a bare "Permission denied (publickey)".
 
 ```bash
 sudo -iu webdeploy
-ssh-keygen -t ed25519 -N '' -f ~/.ssh/ci_deploy -C "github-actions complymgmt_lite staging"
+ssh-keygen -t ecdsa -b 256 -N '' -f ~/.ssh/ci_deploy -C "github-actions complymgmt_lite staging"
 echo "from=\"127.0.0.1\" $(cat ~/.ssh/ci_deploy.pub)" >> ~/.ssh/authorized_keys
 chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys
 ssh-keyscan 127.0.0.1    # -> DEPLOY_KNOWN_HOSTS
