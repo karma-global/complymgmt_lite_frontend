@@ -1,0 +1,187 @@
+name: Rollback
+
+# Manual rollback: Actions -> Rollback -> Run workflow.
+# Leave "release" empty to go back to the release that was live before the current one, or give a
+# release id (see "list releases only", or the Summary of any Deploy run). Rolling back again with an
+# empty release returns to where you were. Nothing is rebuilt: the server switches its `current` symlink.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment
+        type: choice
+        options: [staging, production]
+        required: true
+      release:
+        description: Release id to switch to (empty = the previous release)
+        type: string
+        required: false
+      list_only:
+        description: List releases only (change nothing)
+        type: boolean
+        default: false
+      reason:
+        description: Why (goes into the run summary)
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      runner: ${{ steps.plan.outputs.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - id: plan
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          RELEASE: ${{ inputs.release }}
+          STAGING_RUNNER: ${{ vars.STAGING_RUNNER }}
+          PRODUCTION_RUNNER: ${{ vars.PRODUCTION_RUNNER }}
+        run: |
+          # The id ends up in a remote shell command, so only accept the release id format
+          if ! [[ "$RELEASE" =~ ^([0-9]{8}T[0-9]{6}Z-[0-9a-f]{7,40})?$ ]]; then
+            echo "::error::'$RELEASE' is not a release id (expected e.g. 20261016T101500Z-c0bacf1)"
+            exit 1
+          fi
+          runner="$STAGING_RUNNER"
+          [ "$ENVIRONMENT" = production ] && runner="$PRODUCTION_RUNNER"
+          echo "runner=$(.github/scripts/runner-json.sh "$runner")" >> "$GITHUB_OUTPUT"
+
+  rollback:
+    name: ${{ inputs.list_only && 'List releases on' || 'Roll back' }} ${{ inputs.environment }}
+    needs: plan
+    runs-on: ${{ fromJSON(needs.plan.outputs.runner) }}
+    timeout-minutes: 10
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ vars.APP_URL }}
+    # Shares the deploy queue, so a rollback never races a deploy
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    outputs:
+      before: ${{ steps.before.outputs.release }}
+      after: ${{ steps.switch.outputs.release }}
+    env:
+      RELEASE: ${{ inputs.release }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      APP_URL: ${{ vars.APP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            deploy
+            .github/actions
+
+      - name: Check configuration
+        run: |
+          [ -n "$DEPLOY_PATH" ] || { echo "::error::Environment variable DEPLOY_PATH is not set"; exit 1; }
+          [ -n "$APP_URL" ] || { echo "::error::Environment variable APP_URL is not set"; exit 1; }
+
+      - uses: ./.github/actions/ssh-setup
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          user: ${{ secrets.DEPLOY_USER }}
+          port: ${{ vars.DEPLOY_PORT || '22' }}
+          private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+          known-hosts: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+
+      - name: Upload the server script
+        run: |
+          $DEPLOY_SSH target "mkdir -p '$DEPLOY_PATH/incoming'"
+          $DEPLOY_SCP deploy/remote.sh "target:$DEPLOY_PATH/incoming/"
+
+      - name: Releases on the server
+        id: before
+        run: |
+          $DEPLOY_SSH target "bash '$DEPLOY_PATH/incoming/remote.sh' list '$DEPLOY_PATH'" | tee "$RUNNER_TEMP/before.txt"
+          echo "release=$($DEPLOY_SSH target "bash '$DEPLOY_PATH/incoming/remote.sh' current '$DEPLOY_PATH'")" >> "$GITHUB_OUTPUT"
+
+      - name: Roll back
+        id: switch
+        if: ${{ !inputs.list_only }}
+        run: |
+          $DEPLOY_SSH target "DEPLOY_ACTOR='manual-rollback/$GITHUB_ACTOR' \
+            bash '$DEPLOY_PATH/incoming/remote.sh' rollback '$DEPLOY_PATH' '$RELEASE'"
+          echo "release=$($DEPLOY_SSH target "bash '$DEPLOY_PATH/incoming/remote.sh' current '$DEPLOY_PATH'")" >> "$GITHUB_OUTPUT"
+
+      # No automatic undo here: a person chose this release, so a failure is reported for them to act on
+      - name: Health check
+        if: ${{ !inputs.list_only }}
+        env:
+          NOW_LIVE: ${{ steps.switch.outputs.release }}
+        run: bash deploy/healthcheck.sh "$APP_URL" "$NOW_LIVE"
+
+      - name: Summary
+        if: always()
+        env:
+          BEFORE: ${{ steps.before.outputs.release }}
+          AFTER: ${{ steps.switch.outputs.release }}
+          REASON: ${{ inputs.reason }}
+          LIST_ONLY: ${{ inputs.list_only }}
+        run: |
+          {
+            if [ "$LIST_ONLY" = true ]; then
+              echo "### Releases on ${{ inputs.environment }}"
+            else
+              echo "### Rollback on ${{ inputs.environment }}: ${{ job.status }}"
+              echo "- From \`${BEFORE:-unknown}\` to \`${AFTER:-unchanged}\`"
+              echo "- By $GITHUB_ACTOR${REASON:+: $REASON}"
+            fi
+            echo '```'
+            $DEPLOY_SSH target "bash '$DEPLOY_PATH/incoming/remote.sh' list '$DEPLOY_PATH'" || echo "(could not list releases)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove SSH key
+        if: always()
+        run: rm -rf "${DEPLOY_SSH_DIR:-/nonexistent}"
+
+  notify:
+    name: Notify
+    needs: rollback
+    permissions:
+      contents: read
+      issues: write # GitHub-email fallback (comments on the alerts issue)
+    if: always() && !inputs.list_only
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Send
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          RESULT: ${{ needs.rollback.result }}
+          BEFORE: ${{ needs.rollback.outputs.before }}
+          AFTER: ${{ needs.rollback.outputs.after }}
+          REASON: ${{ inputs.reason }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          SMTP_URL: ${{ secrets.SMTP_URL }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
+          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
+          # Fallback when none of the above is set: GitHub emails via the alerts issue
+          GH_TOKEN: ${{ github.token }}
+          NOTIFY_GITHUB_MENTIONS: ${{ vars.NOTIFY_GITHUB_MENTIONS }}
+        run: |
+          details="From: ${BEFORE:-unknown}"$'\n'"To: ${AFTER:-unchanged}"$'\n'"By: $GITHUB_ACTOR"$'\n'"Reason: ${REASON:-not given}"
+          if [ "$RESULT" = success ]; then
+            status=warning; title="Manual rollback on $ENVIRONMENT"
+          else
+            status=failure; title="Manual rollback on $ENVIRONMENT FAILED ($RESULT)"
+          fi
+          NOTIFY_STATUS="$status" NOTIFY_TITLE="$title" NOTIFY_BODY="$details" \
+            NOTIFY_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            .github/scripts/notify.sh

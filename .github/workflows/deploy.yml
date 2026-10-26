@@ -1,0 +1,276 @@
+name: Deploy
+
+# develop -> staging, main -> production. "Run workflow" on either branch redeploys its tip.
+# Each run: build once -> upload a versioned release -> switch the server's `current` symlink ->
+# health check -> on failure, automatically switch back to the release that was live before.
+# See deploy/README.md for the one-time server and GitHub setup.
+on:
+  push:
+    branches: [develop, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.plan.outputs.environment }}
+      mode: ${{ steps.plan.outputs.mode }}
+      release: ${{ steps.plan.outputs.release }}
+      runner: ${{ steps.plan.outputs.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - id: plan
+        env:
+          STAGING_RUNNER: ${{ vars.STAGING_RUNNER }}
+          PRODUCTION_RUNNER: ${{ vars.PRODUCTION_RUNNER }}
+        run: |
+          case "$GITHUB_REF_NAME" in
+            develop) environment=staging;    mode=stage; runner="$STAGING_RUNNER" ;;
+            main)    environment=production; mode=prod;  runner="$PRODUCTION_RUNNER" ;;
+            *) echo "::error::Only develop (staging) and main (production) deploy; got $GITHUB_REF_NAME"; exit 1 ;;
+          esac
+          # UTC timestamp first, so release names sort by age on the server
+          release="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_SHA::7}"
+          {
+            echo "environment=$environment"
+            echo "mode=$mode"
+            echo "release=$release"
+            echo "runner=$(.github/scripts/runner-json.sh "$runner")"
+          } >> "$GITHUB_OUTPUT"
+          echo "### $environment release \`$release\`" >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MODE: ${{ needs.plan.outputs.mode }}
+      RELEASE: ${{ needs.plan.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
+
+      # VITE_* values are baked into the bundle at build time, so each environment is built with its own file.
+      # Kept as repository secrets (not environment secrets) so the build doesn't wait on production approval.
+      - name: Write .env.${{ needs.plan.outputs.mode }}
+        env:
+          ENV_FILE: ${{ needs.plan.outputs.environment == 'production' && secrets.PRODUCTION_ENV_FILE || secrets.STAGING_ENV_FILE }}
+        run: |
+          if [ -z "$ENV_FILE" ]; then
+            echo "::error::Secret ${{ needs.plan.outputs.environment == 'production' && 'PRODUCTION_ENV_FILE' || 'STAGING_ENV_FILE' }} is not set"
+            exit 1
+          fi
+          printf '%s\n' "$ENV_FILE" > ".env.$MODE"
+          grep -q '^VITE_API_BASE_URL=' ".env.$MODE" || { echo "::error::The env file has no VITE_API_BASE_URL"; exit 1; }
+
+      - name: Build
+        run: npx vite build --mode "$MODE"
+
+      # version.json lets the health check (and anyone) see exactly which release a server is serving
+      - name: Stamp and package the release
+        run: |
+          cat > "dist-$MODE/version.json" <<EOF
+          {
+            "release": "$RELEASE",
+            "commit": "$GITHUB_SHA",
+            "branch": "$GITHUB_REF_NAME",
+            "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "run": "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          }
+          EOF
+          tar -czf "$RELEASE.tar.gz" -C "dist-$MODE" .
+          ls -lh "$RELEASE.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ needs.plan.outputs.release }}
+          path: ${{ needs.plan.outputs.release }}.tar.gz
+          retention-days: 30
+          if-no-files-found: error
+
+  deploy:
+    name: Deploy to ${{ needs.plan.outputs.environment }}
+    needs: [plan, build]
+    runs-on: ${{ fromJSON(needs.plan.outputs.runner) }}
+    timeout-minutes: 20
+    # Production approval (required reviewers) and the branch rule live on this GitHub environment
+    environment:
+      name: ${{ needs.plan.outputs.environment }}
+      url: ${{ vars.APP_URL }}
+    # One deploy or rollback per environment at a time; later runs queue instead of cancelling
+    concurrency:
+      group: deploy-${{ needs.plan.outputs.environment }}
+      cancel-in-progress: false
+    outputs:
+      previous: ${{ steps.before.outputs.release }}
+      rolled_back_to: ${{ steps.rollback.outputs.to }}
+      app_url: ${{ vars.APP_URL }}
+    env:
+      RELEASE: ${{ needs.plan.outputs.release }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      APP_URL: ${{ vars.APP_URL }}
+      KEEP_RELEASES: ${{ vars.KEEP_RELEASES || '5' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            deploy
+            .github/actions
+
+      - name: Check configuration
+        run: |
+          [ -n "$DEPLOY_PATH" ] || { echo "::error::Environment variable DEPLOY_PATH is not set"; exit 1; }
+          [ -n "$APP_URL" ] || { echo "::error::Environment variable APP_URL is not set"; exit 1; }
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ needs.plan.outputs.release }}
+          path: ${{ runner.temp }}/release
+
+      - uses: ./.github/actions/ssh-setup
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          user: ${{ secrets.DEPLOY_USER }}
+          port: ${{ vars.DEPLOY_PORT || '22' }}
+          private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+          known-hosts: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+
+      - name: Upload release
+        run: |
+          $DEPLOY_SSH target "mkdir -p '$DEPLOY_PATH/incoming'"
+          $DEPLOY_SCP "$RUNNER_TEMP/release/$RELEASE.tar.gz" deploy/remote.sh "target:$DEPLOY_PATH/incoming/"
+
+      - name: Note the live release
+        id: before
+        run: |
+          live="$($DEPLOY_SSH target "bash '$DEPLOY_PATH/incoming/remote.sh' current '$DEPLOY_PATH'")"
+          echo "release=$live" >> "$GITHUB_OUTPUT"
+          echo "Live before this deploy: ${live:-none}"
+
+      - name: Activate
+        run: |
+          $DEPLOY_SSH target "DEPLOY_ACTOR='$GITHUB_ACTOR' KEEP_RELEASES='$KEEP_RELEASES' \
+            bash '$DEPLOY_PATH/incoming/remote.sh' activate '$DEPLOY_PATH' '$RELEASE' '$DEPLOY_PATH/incoming/$RELEASE.tar.gz'"
+
+      - name: Health check
+        run: bash deploy/healthcheck.sh "$APP_URL" "$RELEASE"
+
+      # Automated rollback: anything failing (or a cancel) after the new release went live switches back
+      - name: Automated rollback
+        id: rollback
+        if: (failure() || cancelled()) && steps.before.outcome == 'success'
+        env:
+          PREVIOUS: ${{ steps.before.outputs.release }}
+        run: |
+          live="$($DEPLOY_SSH target "bash '$DEPLOY_PATH/incoming/remote.sh' current '$DEPLOY_PATH'")"
+          if [ "$live" != "$RELEASE" ]; then
+            echo "Release $RELEASE never went live (live: ${live:-none}); nothing to roll back."
+            exit 0
+          fi
+          if [ -z "$PREVIOUS" ]; then
+            echo "::error::First deploy to this server, so there is no earlier release to roll back to."
+            exit 1
+          fi
+          echo "::warning::Rolling back $RELEASE -> $PREVIOUS"
+          $DEPLOY_SSH target "DEPLOY_ACTOR='auto-rollback/$GITHUB_ACTOR' \
+            bash '$DEPLOY_PATH/incoming/remote.sh' rollback '$DEPLOY_PATH' '$PREVIOUS'"
+          bash deploy/healthcheck.sh "$APP_URL" "$PREVIOUS"
+          echo "to=$PREVIOUS" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        if: always()
+        env:
+          PREVIOUS: ${{ steps.before.outputs.release }}
+          ROLLED_BACK_TO: ${{ steps.rollback.outputs.to }}
+          OUTCOME: ${{ job.status }}
+        run: |
+          {
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Environment | ${{ needs.plan.outputs.environment }} |"
+            echo "| Release | \`$RELEASE\` |"
+            echo "| Commit | \`$GITHUB_SHA\` |"
+            echo "| Was live before | \`${PREVIOUS:-none}\` |"
+            echo "| Result | $OUTCOME |"
+            [ -n "$ROLLED_BACK_TO" ] && echo "| Automatically rolled back to | \`$ROLLED_BACK_TO\` |"
+            echo
+            echo "Releases on the server:"
+            echo '```'
+            $DEPLOY_SSH target "bash '$DEPLOY_PATH/incoming/remote.sh' list '$DEPLOY_PATH'" || echo "(could not list releases)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove SSH key
+        if: always()
+        run: rm -rf "${DEPLOY_SSH_DIR:-/nonexistent}"
+
+  # Runs on a GitHub-hosted runner, so the staging server needs nothing extra for notifications
+  notify:
+    name: Notify
+    needs: [plan, build, deploy]
+    permissions:
+      contents: read
+      issues: write # GitHub-email fallback (comments on the alerts issue)
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Send
+        env:
+          ENVIRONMENT: ${{ needs.plan.outputs.environment }}
+          RELEASE: ${{ needs.plan.outputs.release }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          PREVIOUS: ${{ needs.deploy.outputs.previous }}
+          ROLLED_BACK_TO: ${{ needs.deploy.outputs.rolled_back_to }}
+          APP_URL: ${{ needs.deploy.outputs.app_url }}
+          HEAD_MESSAGE: ${{ github.event.head_commit.message }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          SMTP_URL: ${{ secrets.SMTP_URL }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
+          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
+          # Fallback when none of the above is set: GitHub emails via the alerts issue
+          GH_TOKEN: ${{ github.token }}
+          NOTIFY_GITHUB_MENTIONS: ${{ vars.NOTIFY_GITHUB_MENTIONS }}
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          details="Release: $RELEASE"$'\n'"Commit: ${GITHUB_SHA::7} ${HEAD_MESSAGE%%$'\n'*}"$'\n'"Triggered by: $GITHUB_ACTOR"
+          if [ "$BUILD_RESULT" != success ]; then
+            status=failure; title="$ENVIRONMENT build failed; nothing was deployed"
+            body="$details"
+          elif [ "$DEPLOY_RESULT" = success ]; then
+            status=success; title="Deployed to $ENVIRONMENT"
+            body="$details"$'\n'"Live at: ${APP_URL:-?}"$'\n'"Was: ${PREVIOUS:-none}"
+          elif [ -n "$ROLLED_BACK_TO" ]; then
+            status=failure; title="$ENVIRONMENT deploy failed; automatically rolled back"
+            body="$details"$'\n'"The health check failed, so the server went back to $ROLLED_BACK_TO."
+          elif [ "$DEPLOY_RESULT" = cancelled ]; then
+            status=warning; title="$ENVIRONMENT deploy was cancelled"
+            body="$details"$'\n'"Check the run: if the new release had gone live, it was switched back."
+          else
+            status=failure; title="$ENVIRONMENT deploy failed"
+            body="$details"$'\n'"Result: $DEPLOY_RESULT. See the run for the failing step and the releases on the server."
+          fi
+          NOTIFY_STATUS="$status" NOTIFY_TITLE="$title" NOTIFY_BODY="$body" NOTIFY_URL="$run_url" \
+            .github/scripts/notify.sh

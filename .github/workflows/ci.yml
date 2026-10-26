@@ -1,0 +1,41 @@
+name: CI
+
+# Every pull request into develop (staging) or main (production) must build, and must not add lint errors.
+on:
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the lint gate compares against the base branch
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # --legacy-peer-deps: @material-ui/core@4 peers on React <= 17 and the lockfile was made this way
+      - name: Install
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
+
+      - name: Lint (no new errors)
+        if: github.event_name == 'pull_request'
+        run: .github/scripts/lint-ratchet.sh "origin/${{ github.base_ref }}"
+
+      # VITE_* values only change what gets baked in, not whether it compiles, so no env file is needed here
+      - name: Build
+        run: npx vite build --mode ci

@@ -1,0 +1,60 @@
+name: SSH to deploy target
+description: >
+  Writes the deploy key, pinned host key and an ssh config (Host alias `target`) under RUNNER_TEMP,
+  and exports DEPLOY_SSH / DEPLOY_SCP so later steps can run `$DEPLOY_SSH target ...`.
+  Works the same on GitHub-hosted and self-hosted runners; nothing is written to ~/.ssh.
+inputs:
+  host:
+    description: Server host name or IP
+    required: true
+  user:
+    description: Login user that owns DEPLOY_PATH
+    required: true
+  port:
+    description: SSH port
+    required: false
+    default: "22"
+  private-key:
+    description: Private key (OpenSSH format) for the deploy user
+    required: true
+  known-hosts:
+    description: Output of `ssh-keyscan -p <port> <host>`, so the host key is pinned
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        HOST: ${{ inputs.host }}
+        USER_NAME: ${{ inputs.user }}
+        PORT: ${{ inputs.port }}
+        KEY: ${{ inputs.private-key }}
+        KNOWN_HOSTS: ${{ inputs.known-hosts }}
+      run: |
+        set -euo pipefail
+        for v in HOST USER_NAME KEY KNOWN_HOSTS; do
+          [ -n "${!v}" ] || { echo "::error::ssh-setup: $v is empty; check the environment's secrets"; exit 1; }
+        done
+        dir="$RUNNER_TEMP/deploy-ssh"
+        mkdir -p "$dir" && chmod 700 "$dir"
+        printf '%s\n' "$KEY" > "$dir/key" && chmod 600 "$dir/key"
+        printf '%s\n' "$KNOWN_HOSTS" > "$dir/known_hosts"
+        cat > "$dir/config" <<EOF
+        Host target
+          HostName $HOST
+          User $USER_NAME
+          Port ${PORT:-22}
+          IdentityFile $dir/key
+          IdentitiesOnly yes
+          UserKnownHostsFile $dir/known_hosts
+          StrictHostKeyChecking yes
+          BatchMode yes
+          ConnectTimeout 20
+          ServerAliveInterval 15
+          ServerAliveCountMax 4
+        EOF
+        echo "DEPLOY_SSH=ssh -F $dir/config" >> "$GITHUB_ENV"
+        echo "DEPLOY_SCP=scp -F $dir/config" >> "$GITHUB_ENV"
+        echo "DEPLOY_SSH_DIR=$dir" >> "$GITHUB_ENV"
+        ssh -F "$dir/config" target true
+        echo "SSH to $USER_NAME@$HOST:${PORT:-22} works"
