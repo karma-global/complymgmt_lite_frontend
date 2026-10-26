@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import '../../style/complianceCockpit.css';
 import ClientOnboarding from './ClientOnboarding';
 import ComplianceHealth from './ComplianceHealth';
@@ -8,7 +8,6 @@ import FinanceBilling from './FinanceBilling';
 import GeneralCompliance from './GeneralCompliance';
 
 const ComplianceCockpit = () => {
-  const [activeTab, setActiveTab] = useState('Compliance Health');
 
   return (
     <div className="compliance-cockpit">

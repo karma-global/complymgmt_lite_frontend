@@ -70,7 +70,7 @@ function ChangePassword({ setIsChangePassword }) {
       }
     };
     fetchTempPasswordStatus();
-  }, []);
+  }, [currentUserId, setIsChangePassword]);
   const validate = () => {
     const tempErrors = {};
 

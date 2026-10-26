@@ -1,7 +1,7 @@
 import MuiTextField from "../../component/MuiInputs/MuiTextField";
 import SingleSelectTextField from "../../component/MuiInputs/SingleSelectTextField";
 import ColumnDropdown from "./ColumnDropdown";
-export default function Mapping({ columns, mapping, onChange, onRemove }) {
+export default function Mapping({ mapping, onChange, onRemove }) {
 
   const handleSourceChange = (value, index) => {
     const newSources = [...mapping.Source];

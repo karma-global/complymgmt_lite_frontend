@@ -516,7 +516,9 @@ const DocumentUpload = () => {
         if (data) {
           setServiceTrackerName(data);
         }
-      } catch {}
+      } catch {
+        // Handle error silently
+      }
     };
 
     if (current?.module_id) {

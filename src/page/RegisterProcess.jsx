@@ -3,7 +3,7 @@ import SmallSizeModal from '../component/SmallSizeModal';
 import { CloudUploadIcon } from 'lucide-react';
 import FilePresentIcon from '@mui/icons-material/FilePresent';
 import SingleSelectTextField from '../component/MuiInputs/SingleSelectTextField';
-import { createRegister, fetchAllGroupHolding, fetchCompaniesNameByGroupId, getLocationByCompanyId, processRegister } from '../api/service';
+import { fetchAllGroupHolding, fetchCompaniesNameByGroupId, getLocationByCompanyId, processRegister } from '../api/service';
 import MonthYearCalander from '../component/MonthYearCalander';
 import MuiTextField from '../component/MuiInputs/MuiTextField';
 import Snackbars from '../component/Snackbars';
@@ -157,7 +157,7 @@ const RegisterProcess = () => {
                 by_id: null,
             });
             setFileName('');
-        } catch (error) {
+        } catch {
             setIsSnackbarsOpen({
                 ...issnackbarsOpen,
                 open: true,
@@ -175,7 +175,7 @@ const RegisterProcess = () => {
             try {
                 const data = await fetchAllGroupHolding();
                 setGroupHoldingName(data);
-            } catch (error) {
+            } catch {
                 // console.error("Error fetching data:", error);
             }
         };

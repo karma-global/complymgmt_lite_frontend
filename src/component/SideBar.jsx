@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import '../style/sidebar.css';
-import { Link, Outlet } from 'react-router-dom';
+import { Link, Outlet, useLocation } from 'react-router-dom';
 import ApartmentOutlinedIcon from '@mui/icons-material/ApartmentOutlined';
 import DomainAddOutlinedIcon from '@mui/icons-material/DomainAddOutlined';
 import DashboardCustomizeOutlinedIcon from '@mui/icons-material/DashboardCustomizeOutlined';
@@ -127,6 +127,7 @@ function SideBar({ sidebarOpen, setSidebarOpen, setActivePage, activePage }) {
         // { icon: (active) => <CreateApplicabilityIcon active={active} />, label: 'Create Applicability', link: 'create_applicability' },
 
     ], []);
+    const location = useLocation();
     useEffect(() => {
         const allMenus = [...serviceTracker, ...registerProcessing];
 

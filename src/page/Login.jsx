@@ -5,7 +5,7 @@ import complyn_mgmt_logo from '../assets/complymgmt_logo.png'
 import API from '../api/axios'; // your axios instance
 import { LOGIN_API } from '../api/Endpoint';
 import Snackbars from '../component/Snackbars';
-import { useToken } from '../TokenProvider';
+import { useToken } from '../tokenContext';
 import { encryptData } from './utils/encrypt';
 
 

@@ -75,7 +75,7 @@ const GeneralComplianceDashboard = ({ data, shouldShow, page, limit, setActiveDr
         };
 
         fetchGeneralComplianceData();
-    }, []);
+    }, [page, limit]);
 
     if (!data || Object.keys(data).length === 0) {
         return <div className='no-data'>{data === 403 ? 'No Data Found' : 'Loading...'}</div>;

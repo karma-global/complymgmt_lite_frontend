@@ -423,16 +423,6 @@ const ServiceTrackers = () => {
     );
   };
 
-  const getRoleColorForFileStatus = (status) => {
-    switch (status) {
-      case 1:
-        return { color: "#4CAF50" }; // green
-      case 0:
-        return { color: "#F44336" }; // brown
-      default:
-        return { color: "#41464b" }; // gray
-    }
-  };
 
   const handleCheckboxClick = async (id) => {
     try {

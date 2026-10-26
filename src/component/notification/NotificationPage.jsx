@@ -118,7 +118,7 @@ const NotificationPage = ({setUnreadCountNotification}) => {
       }
     };
     fetchNotifications();
-  }, []);
+  }, [SystemUserId, setUnreadCountNotification]);
 
   // Badge count in the navbar; a failed refetch just leaves the old count
   const refreshCount = async () => {

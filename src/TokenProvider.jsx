@@ -1,7 +1,5 @@
-// tokenContext.js
-import { createContext, useContext, useState } from "react";
-
-const TokenContext = createContext();
+import { useState } from "react";
+import { TokenContext } from "./tokenContext";
 
 export const TokenProvider = ({ children }) => {
   const [token, setToken] = useState(null);
@@ -11,8 +9,6 @@ export const TokenProvider = ({ children }) => {
     </TokenContext.Provider>
   );
 };
-
-export const useToken = () => useContext(TokenContext);
 
 
 

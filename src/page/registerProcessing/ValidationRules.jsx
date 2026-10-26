@@ -109,22 +109,14 @@ const validationData = {
 };
 
 export default function ValidationRules() {
- const [validatedRules, setValidatedRules] = useState(
-  new Set(validationData.rules.map(r => r.id))
-);
+  // Every rule starts validated; the reset/validate-all buttons below are commented out
+  const [validatedRules] = useState(
+    new Set(validationData.rules.map(r => r.id))
+  );
 
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState("all");
 
-  const toggleValidation = (id) => {
-    const newSet = new Set(validatedRules);
-    if (newSet.has(id)) {
-      newSet.delete(id);
-    } else {
-      newSet.add(id);
-    }
-    setValidatedRules(newSet);
-  };
 
   const filteredRules = validationData.rules.filter((rule) => {
     const matchesSearch = rule.description.toLowerCase().includes(searchTerm.toLowerCase());
@@ -134,9 +126,7 @@ export default function ValidationRules() {
     return matchesSearch;
   });
 
-  const validatedCount = validatedRules.size;
   const totalCount = validationData.rules.length;
-  const percentage = Math.round((validatedCount / totalCount) * 100);
 
   return (
     <div className="validation-container">

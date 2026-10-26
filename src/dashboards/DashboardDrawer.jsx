@@ -47,15 +47,16 @@ export default function DashboardDrawerGrid({
   const gridRef = React.useRef();
   const [filters, setFilters] = useState({});
 
+  // The Filters button applies to the client-side grid below (the detail page filters its own rows)
   const filteredRowData = useMemo(() => {
-    if (Object.keys(filters).length === 0) return data;
+    if (Object.keys(filters).length === 0) return rowData;
 
-    return data.filter((row) => {
+    return rowData.filter((row) => {
       return Object.entries(filters).every(([column, values]) => {
         return values.includes(row[column]);
       });
     });
-  }, [data, filters]);
+  }, [rowData, filters]);
 
   const handleFilterApply = (newFilters) => {
     setFilters(newFilters);
@@ -177,7 +178,7 @@ export default function DashboardDrawerGrid({
       setChartSeries([]);
       setChartOptions({});
     }
-  }, [chartType, rowData]);
+  }, [chartType, rowData, chartXaxisCategory]);
 
   const onPaginationChanged = () => {
     if (gridRef.current) {
@@ -318,7 +319,7 @@ export default function DashboardDrawerGrid({
               <AgGridReact
                 ref={gridRef}
                 theme="legacy"
-                rowData={rowData}
+                rowData={filteredRowData}
                 columnDefs={columnDefs}
                 pagination={true}
                 paginationPageSize={20}

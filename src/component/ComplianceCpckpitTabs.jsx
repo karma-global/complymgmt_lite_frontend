@@ -2,9 +2,6 @@ import React, { useState } from 'react';
 import img1 from '../assets/compliance-cockpit-1.png';
 import img2 from '../assets/compliance-cockpit-2.png';
 import img3 from '../assets/compliance-cockpit-3.png';
-import img4 from '../assets/compliance-cockpit-4.png';
-import img5 from '../assets/compliance-cockpit-5.png';
-import img6 from '../assets/compliance-cockpit-6.png';
 import '../style/statsCards.css';
 import { Tabs, Tab, Box } from '@mui/material';
 import GeneralComplianceDashboard from '../dashboards/GeneralComplianceDashboard/GeneralComplianceDashboard';
@@ -33,26 +30,6 @@ const ComplianceCpckpitTabs = () => {
     },
   ];
 
-  const statsComp = [
-    {
-      title: 'Audit & Visits',
-      icon: img4,
-      color: 'green',
-      bg_color: '#fee9e3',
-    },
-    {
-      title: 'General Compliance',
-      icon: img5,
-      color: 'blue',
-      bg_color: '#eae5fb',
-    },
-    {
-      title: 'Finance & Billing',
-      icon: img6,
-      color: 'orange',
-      bg_color: '#fef4dc',
-    },
-  ];
 
   const handleTabChange = (event, newValue) => {
     setActiveTab(newValue);

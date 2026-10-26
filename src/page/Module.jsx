@@ -197,7 +197,7 @@ const Module = () => {
 
                 ]);
                 setData(locationData);
-            } catch (error) {
+            } catch {
                 // console.error("Error fetching data:", error);
             }
         };
@@ -266,20 +266,6 @@ const Module = () => {
 
     }
 
-    const getRoleColor = (role) => {
-        switch (role) {
-            case 'Admin':
-                return { background: '#d1e7dd', color: '#0f5132' }; // green
-            case 'Manager':
-                return { background: '#cff4fc', color: '#055160' }; // blue
-            case 'Client':
-                return { background: '#fce5cd', color: '#7f4f24' }; // brown
-            case 'Super Admin':
-                return { background: '#f8d7da', color: '#842029' }; // red
-            default:
-                return { background: '#e2e3e5', color: '#41464b' }; // gray
-        }
-    };
 
     const handleToggleChange = async (e, params) => {
         const newIsActive = {
@@ -314,16 +300,6 @@ const Module = () => {
     };
 
 
-    const getRoleColorForFileStatus = (status) => {
-        switch (status) {
-            case 1:
-                return { color: '#4CAF50' }; // green
-            case 0:
-                return { color: '#F44336' }; // brown
-            default:
-                return { color: '#41464b' }; // gray
-        }
-    };
 
     const handleCheckboxClick = async (rowId) => {
         try {
@@ -540,7 +516,7 @@ const Module = () => {
         editable: true,
         headerStyle: { color: '#515151', backgroundColor: '#ffffe24d' },
     };
-    const onRowValueChanged = (event) => {
+    const onRowValueChanged = () => {
         //  // console.log('Row updated:', event.data);
     };
     const onFilterTextBoxChanged = useCallback(() => {

@@ -15,12 +15,8 @@ import ValidationRules from "./ValidationRules";
 import ValidationCheckModal from "../../component/ValidationCheckModal";
 
 function RegisterProcessing() {
-  const [columns, setColumns] = useState([]);
 
   const [mappings, setMappings] = useState([]);
-  const [isSaved, setIsSaved] = useState(false);
-  const [loadedFromApi, setLoadedFromApi] = useState(false);
-  const [tempPayload, setTempPayload] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [companyName, setCompanyName] = useState([]);
   const [registerNames, setRegisterNames] = useState([]);
@@ -48,10 +44,6 @@ function RegisterProcessing() {
     default: "",
     target: "",
   });
-  useEffect(() => {
-    if (loadedFromApi) return;
-    setIsSaved(false);
-  }, [mappings, loadedFromApi]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -95,12 +87,10 @@ function RegisterProcessing() {
           }));
 
           setMappings(normalized);
-          setLoadedFromApi(true);
-          setIsSaved(true);
         } else {
           setMappings([]);
         }
-      } catch (err) {
+      } catch {
         setMappings([]);
       }
     };
@@ -123,20 +113,14 @@ function RegisterProcessing() {
         Default: "",
       },
     ]);
-    setIsSaved(false);
-    setLoadedFromApi(false);
   };
 
   const updateMapping = (id, newMapping) => {
     setMappings((prev) => prev.map((m) => (m.id === id ? newMapping : m)));
-    setIsSaved(false);
-    setLoadedFromApi(false);
   };
 
   const removeMapping = (id) => {
     setMappings((prev) => prev.filter((m) => m.id !== id));
-    setIsSaved(false);
-    setLoadedFromApi(false);
   };
 
   const handleProceed = async (e) => {
@@ -218,9 +202,6 @@ function RegisterProcessing() {
 
   const handleClear = () => {
     setMappings([]);
-    setIsSaved(false);
-    setLoadedFromApi(false);
-    setTempPayload(null);
   };
 const closeModal = () => {
   setIsModalOpen(false);
@@ -302,7 +283,6 @@ const closeModal = () => {
         mappings.map((mapping) => (
           <Mapping
             key={mapping.id}
-            columns={columns}
             mapping={mapping}
             onChange={(newMapping) => updateMapping(mapping.id, newMapping)}
             onRemove={() => removeMapping(mapping.id)}

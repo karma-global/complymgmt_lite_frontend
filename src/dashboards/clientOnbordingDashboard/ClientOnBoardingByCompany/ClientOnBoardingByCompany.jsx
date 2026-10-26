@@ -27,7 +27,7 @@ function ClientOnBoardingByCompany({selectedCompany}) {
     }
 
     return locations?.sort();
-  }, [selectedModule]);
+  }, [locationData.location_module_map, selectedModule]);
 
  if (!locationData || Object.keys(locationData).length === 0) {
         return <div className='no-data'>{locationData === 403 ? 'No Data Found' : 'Loading...'}</div>;

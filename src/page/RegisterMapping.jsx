@@ -2,7 +2,6 @@ import { useState } from "react";
 import "../style/registerMapping.css";
 import { createMapping } from "../api/service";
 import Snackbars from "../component/Snackbars";
-import { useNavigate, useLocation } from "react-router-dom";
 export default function RegisterMapping() {
   const [steps, setSteps] = useState([]);
   const [issnackbarsOpen, setIsSnackbarsOpen] = useState({
