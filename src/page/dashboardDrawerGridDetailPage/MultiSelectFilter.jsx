@@ -22,7 +22,8 @@ const MultiSelectFilter = ({ rowData: rawRows, onFilterApply, filterColumns = []
 
 
   const getUniqueValues = (columnName) => {
-    const values = rowData.map(row => row[columnName]).filter(Boolean);
+    // Array cells (a tracker's sub_module_name) offer each element as its own option
+    const values = rowData.flatMap(row => row[columnName]).filter(Boolean);
     return Array.from(new Set(values)).sort();
   };
 

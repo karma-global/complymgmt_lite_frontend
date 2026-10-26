@@ -319,3 +319,24 @@
         min-width: 269px !important;
     }
 }
+/* Service Trackers grid: thin, theme-coloured scroll bars instead of the browser default */
+.service-tracker-grid .ag-body-horizontal-scroll-viewport,
+.service-tracker-grid .ag-body-vertical-scroll-viewport,
+.service-tracker-grid .ag-body-viewport {
+    scrollbar-width: thin;
+    scrollbar-color: #39749266 transparent;
+}
+.service-tracker-grid ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+.service-tracker-grid ::-webkit-scrollbar-track {
+    background: transparent;
+}
+.service-tracker-grid ::-webkit-scrollbar-thumb {
+    background-color: #39749266;
+    border-radius: 8px;
+}
+.service-tracker-grid ::-webkit-scrollbar-thumb:hover {
+    background-color: #397492;
+}

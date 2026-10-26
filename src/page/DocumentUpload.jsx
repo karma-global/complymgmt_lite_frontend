@@ -26,6 +26,7 @@ import {
   fetchAllModulesNameByLocationId,
   fetchAllSubModuleNameByModuleId,
   fetchServiceTrackerByModuleId,
+  fetchServiceTrackerBySubModuleId,
   fetchDocumentDropdownTypes,
   fetchDocumentDropdownStages,
   downloadFile,
@@ -508,11 +509,14 @@ const DocumentUpload = () => {
       fetchSubModuleByModuleId();
     }
   }, [current?.module_id]);
-  // Fetch service tracker by module ID
+  // Trackers for the chosen sub-module, or for the whole module when no sub-module is picked.
+  // The backend rejects a tracker that doesn't cover the document's sub-module.
   useEffect(() => {
-    const getServiceTrackerByModuleId = async (id) => {
+    const getServiceTrackers = async () => {
       try {
-        const data = await fetchServiceTrackerByModuleId(id);
+        const data = current?.sub_module_id
+          ? await fetchServiceTrackerBySubModuleId(current?.sub_module_id)
+          : await fetchServiceTrackerByModuleId(current?.module_id);
         if (data) {
           setServiceTrackerName(data);
         }
@@ -522,9 +526,9 @@ const DocumentUpload = () => {
     };
 
     if (current?.module_id) {
-      getServiceTrackerByModuleId(current?.module_id);
+      getServiceTrackers();
     }
-  }, [current?.module_id]);
+  }, [current?.module_id, current?.sub_module_id]);
 
   useEffect(() => {
     const getDocumentDropdownTypes = async (service_tracker_name) => {
@@ -1219,11 +1223,24 @@ const DocumentUpload = () => {
               const matchedLocation = moduleName.find(
                 (g) => g.name === selectedName,
               );
+              // Clear the tags below so a stale combination isn't submitted
               setCurrent((prev) => ({
                 ...prev,
                 module_name: selectedName,
                 module_id: matchedLocation?._id || null,
+                sub_module_name: "",
+                sub_module_id: null,
+                service_tracker_name: "",
+                service_tracker_id: null,
+                document_type_name: "",
+                document_type_id: null,
+                stage_name: "",
+                stage_id: null,
               }));
+              setSubModuleName([]);
+              setServiceTrackerName([]);
+              setDocumentDropdownTypes([]);
+              setDocumentDropdownStages([]);
               setErrors((prevErrors) => ({ ...prevErrors, module_name: "" }));
             }}
             names={moduleName}
@@ -1247,7 +1264,16 @@ const DocumentUpload = () => {
                 ...prev,
                 sub_module_name: selectedName,
                 sub_module_id: matchedLocation?._id || null,
+                service_tracker_name: "",
+                service_tracker_id: null,
+                document_type_name: "",
+                document_type_id: null,
+                stage_name: "",
+                stage_id: null,
               }));
+              setServiceTrackerName([]);
+              setDocumentDropdownTypes([]);
+              setDocumentDropdownStages([]);
               setErrors((prevErrors) => ({
                 ...prevErrors,
                 sub_module_name: "",
@@ -1282,10 +1308,20 @@ const DocumentUpload = () => {
                 service_tracker_name: "",
               }));
             }}
-            names={serviceTrackerName?.map((item) => ({
-              _id: item._id,
-              name: item.service_tracker_name,
-            }))}
+            names={[
+              ...(serviceTrackerName ?? []).map((item) => ({
+                _id: item._id,
+                name: item.service_tracker_name,
+              })),
+              // An older document can keep a tracker that no longer covers its sub-module;
+              // still show the stored name rather than a blank select
+              ...(current?.service_tracker_name &&
+              !serviceTrackerName?.some(
+                (item) => item.service_tracker_name === current.service_tracker_name,
+              )
+                ? [{ _id: current.service_tracker_id ?? "stored-tracker", name: current.service_tracker_name }]
+                : []),
+            ]}
             // isdisable={isEditing ? true : false}
             error={!!errors.service_tracker_name}
             helperText={errors.service_tracker_name}
