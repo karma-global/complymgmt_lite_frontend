@@ -66,6 +66,8 @@ A build that is broken never goes live in the first place: `remote.sh` refuses a
 1. **Rollback workflow**: *Actions → Rollback → Run workflow*. Pick the environment; leave *release*
    empty to go back one step (run it again to go forward), or paste a release id. Tick *list releases
    only* first if you want to see what's on the server. Takes seconds: nothing is rebuilt.
+   GitHub only offers a manual-only workflow once it is on the default branch (`main`); until the
+   pipeline has been merged into `main`, use 2 or the server command below.
 2. **Re-run an old Deploy run**: open the Deploy run of the version you want and *Re-run jobs →
    deploy*. It re-uses that run's artifact (30 days), so it works even after the release was pruned
    from the server. If the release is still on the server it just switches to it.
@@ -73,8 +75,9 @@ A build that is broken never goes live in the first place: `remote.sh` refuses a
    the branch and the servers in agreement; do this after 1 or 2 so the next deploy doesn't bring the
    problem back.
 
-On the server itself (e.g. GitHub is down): `bash $DEPLOY_PATH/incoming/remote.sh list $DEPLOY_PATH`,
-then `... rollback $DEPLOY_PATH [<release-id>]`.
+On the server itself (e.g. GitHub is down), as the user that owns `DEPLOY_PATH` (`webdeploy` on
+staging): `sudo -u webdeploy bash $DEPLOY_PATH/incoming/remote.sh list $DEPLOY_PATH`, then
+`... rollback $DEPLOY_PATH [<release-id>]`.
 
 ## One-time server setup (each server, cloud or on-prem)
 
