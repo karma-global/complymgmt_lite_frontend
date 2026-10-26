@@ -37,7 +37,8 @@ going live or rolling back is an atomic symlink switch, so neither needs a web s
 | `deploy/remote.sh` | Runs on the server: `activate`, `rollback`, `list`, `current`. Uploaded on every run. |
 | `deploy/healthcheck.sh` | Runs on the runner: waits for `/version.json` to report the new release, then checks it stays healthy. |
 | `deploy/nginx/complymgmt_lite.conf` | Example nginx site (SPA fallback, caching, old-chunk fallback). |
-| `deploy/nginx/staging.conf` | The staging site: `http://complymgmt.stage`, HTTPS block ready for an internal certificate. |
+| `deploy/nginx/staging.conf` | The staging site `http://complymgmt-lite.staging.kmc.com`: built files, `/api/` to the backend, HTTPS block ready. Template for other staging apps. |
+| `deploy/nginx/00-default.conf` | Staging catch-all: closes connections for names no site claims. Once per server. |
 
 ### Server layout (`DEPLOY_PATH`, e.g. `/var/www/complymgmt_lite`)
 
@@ -111,16 +112,43 @@ ssh-keyscan -p 22 <host>
 
 Server needs: `bash`, `tar`, `flock` (util-linux), and GNU `mv` (`-T`). No Node.js.
 
-## Staging server (on-prem): `http://complymgmt.stage`
+## Staging server (on-prem, shared): `http://complymgmt-lite.staging.kmc.com`
 
-Staging (`stage-server`, 192.168.1.218, Rocky Linux 10, SELinux enforcing) gets the same model as
-production: nginx serving the built files, no Node process, no supervisord. It is on a private
-network, so GitHub can't reach it; a self-hosted runner on the server itself picks up the deploy job
-(it only connects out to GitHub), downloads the build and puts it in place.
+Staging (`stage-server`, 192.168.1.218, Rocky Linux 10, SELinux enforcing, FIPS mode) gets the same
+model as production: nginx serving the built files, no Node process, no supervisord. It is on a
+private network, so GitHub can't reach it; a self-hosted runner on the server itself picks up the
+deploy job (it only connects out to GitHub), downloads the build and puts it in place.
 
-**1. DNS.** Point `complymgmt.stage` at 192.168.1.218 in the internal DNS. The server must resolve the
-name too (the health check runs there): check with `getent hosts complymgmt.stage`, or add
-`127.0.0.1 complymgmt.stage` to `/etc/hosts`.
+### Multi-site staging: the convention
+
+The server hosts several apps, one hostname each, all on port 80/443 of the same nginx:
+
+```
+AD DNS     *.staging.kmc.com -> 192.168.1.218        one wildcard record for every app
+Name       <app>.staging.kmc.com                     e.g. complymgmt-lite.staging.kmc.com
+nginx      /etc/nginx/conf.d/00-default.conf         names no site claims: connection closed
+           /etc/nginx/conf.d/<app>.conf              /      -> /var/www/<app>/current
+                                                     /api/  -> 127.0.0.1:<backend port>, prefix stripped
+Files      /var/www/<app>/{releases,current,previous}, owned by webdeploy
+Runner     one per repo, run as webdeploy, label <app>-staging
+HTTPS      one internal-CA certificate for *.staging.kmc.com, shared by every site
+```
+
+- **Environment as the parent** (`<app>.staging.kmc.com`): one DNS record and one certificate cover
+  every app. A certificate wildcard only covers one level, so don't nest deeper names under it.
+- **API on the same hostname, under `/api/`**: the browser only talks to the site's own origin, so the
+  backend needs no CORS entry per hostname, and backend ports aren't called from browsers. The app is
+  built with `VITE_API_BASE_URL=/api`.
+- **A new app** copies `deploy/` and the workflows, picks `<app>`, adds its own `<app>.conf` (this
+  repo's `deploy/nginx/staging.conf` is the template: change `server_name`, the two `root` paths and
+  the backend port), registers its own runner and sets its own `DEPLOY_PATH` and `APP_URL`. DNS and
+  the certificate need nothing.
+
+### Setting up this app
+
+**1. DNS.** Once for all apps: in the AD DNS zone `kmc.com`, a host record `*.staging` →
+192.168.1.218. The server itself doesn't use the AD DNS and the health check runs there, so it gets
+`127.0.0.1 complymgmt-lite.staging.kmc.com` in `/etc/hosts` (check with `getent hosts`).
 
 **2. Retire the Vite dev server** (staging is down from here until the first deploy lands):
 
@@ -137,14 +165,16 @@ which is root-equivalent, and the frontend only needs to write files):
 sudo dnf install -y nginx
 sudo systemctl enable --now nginx
 sudo firewall-cmd --permanent --add-service=http --add-service=https && sudo firewall-cmd --reload
+sudo setsebool -P httpd_can_network_connect 1    # SELinux: let nginx reach backends for /api/
 
 sudo useradd --create-home --shell /bin/bash webdeploy
 sudo mkdir -p /var/www/complymgmt_lite
 sudo chown webdeploy:webdeploy /var/www/complymgmt_lite && sudo chmod 755 /var/www/complymgmt_lite
 sudo restorecon -Rv /var/www/complymgmt_lite       # SELinux label nginx may read
 
-# deploy/nginx/staging.conf from this repo, copied over first (scp deploy/nginx/staging.conf stage-server:)
-sudo cp ~/staging.conf /etc/nginx/conf.d/complymgmt_lite.conf
+# From this repo, copied over first (scp deploy/nginx/00-default.conf deploy/nginx/staging.conf stage-server:)
+sudo cp ~/00-default.conf /etc/nginx/conf.d/00-default.conf      # once per server
+sudo cp ~/staging.conf /etc/nginx/conf.d/complymgmt-lite.conf
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
@@ -179,30 +209,35 @@ exit
 cd /home/webdeploy/actions-runner-frontend && sudo ./svc.sh install webdeploy && sudo ./svc.sh start
 ```
 
-If the service won't start under SELinux, apply whatever was done for the backend runner.
+If the service won't start under SELinux, label it: `sudo semanage fcontext -a -t bin_t
+'/home/webdeploy/actions-runner-frontend/runsvc.sh' && sudo restorecon -v .../runsvc.sh`.
 
-**6. Backend CORS.** The staging backend only accepts browser calls from origins listed in its
-`CORS_ALLOWED_ORIGINS` env var; add `http://complymgmt.stage` (and `https://complymgmt.stage` once
-TLS is on) and restart it.
+**6. API through nginx.** The site's `/api/` goes to the staging backend on `127.0.0.1:9001` with the
+`/api` prefix removed; the app's own paths keep theirs, so `/api/api/v1/login` arrives as
+`/api/v1/login`. Build with `VITE_API_BASE_URL=/api` (step 7). Requests are then same-origin, so the
+backend's `CORS_ALLOWED_ORIGINS` needs nothing for staging. Uploads up to 100 MB pass nginx (the
+backend's own limit is 50 MB).
 
 **7. GitHub values** (see *GitHub setup* below for where they go):
 
 | Name | Value |
 |------|-------|
-| `STAGING_ENV_FILE` (repo secret) | Contents of `/var/www/complymgmt_lite.vite-old/.env.stage` |
+| `STAGING_ENV_FILE` (repo secret) | `/var/www/complymgmt_lite.vite-old/.env.stage` with `VITE_API_BASE_URL=/api` |
 | `STAGING_RUNNER` (repo variable) | `self-hosted,complymgmt-frontend-staging` |
 | `DEPLOY_HOST` | `127.0.0.1` |
 | `DEPLOY_USER` | `webdeploy` |
 | `DEPLOY_SSH_KEY` / `DEPLOY_KNOWN_HOSTS` | From step 4 |
 | `DEPLOY_PATH` | `/var/www/complymgmt_lite` |
-| `APP_URL` | `http://complymgmt.stage` |
+| `APP_URL` | `http://complymgmt-lite.staging.kmc.com` |
 
 **8. First deploy.** *Actions → Deploy → Run workflow* on `develop` (or merge into `develop`). When it
-is green, `curl http://complymgmt.stage/version.json` shows the release, and the old
+is green, `curl http://complymgmt-lite.staging.kmc.com/version.json` shows the release, a POST to
+`/api/api/v1/login` with no body gets the backend's JSON error, and the old
 `/var/www/complymgmt_lite.vite-old` folder can go.
 
-HTTPS: an internal-only name can't get a public certificate; with one from an internal CA, enable
-the 443 block in `deploy/nginx/staging.conf` and set `APP_URL` to `https://complymgmt.stage`.
+HTTPS: once the internal CA issues the shared `*.staging.kmc.com` certificate, enable the 443 blocks
+in `deploy/nginx/00-default.conf` and `deploy/nginx/staging.conf`, and set `APP_URL` to
+`https://complymgmt-lite.staging.kmc.com`.
 
 ## GitHub setup
 
@@ -210,7 +245,7 @@ the 443 block in `deploy/nginx/staging.conf` and set `APP_URL` to `https://compl
 
 | Secret | Value |
 |--------|-------|
-| `STAGING_ENV_FILE` | Full contents of `.env.stage` (`VITE_API_BASE_URL=...`, `VITE_SECRET=...`) |
+| `STAGING_ENV_FILE` | Full contents of `.env.stage` (`VITE_API_BASE_URL=/api`, `VITE_SECRET_KEY=...`) |
 | `PRODUCTION_ENV_FILE` | Full contents of `.env.prod` |
 
 These are repository secrets (not environment secrets) so the build can run before production approval.
