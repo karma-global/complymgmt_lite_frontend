@@ -91,6 +91,9 @@ case "$cmd" in
       partial="$base/releases/.$id.partial"
       rm -rf "$partial"; mkdir -p "$partial"
       tar -xzf "$tarball" -C "$partial"
+      # The web server runs as another user: make sure it can read everything, whatever modes the
+      # tarball carried (a tarball packed from a mktemp dir makes its root 0700, and the site 403s)
+      chmod -R u+rwX,go+rX,go-w "$partial"
       # A bad build never enters releases/, so it can't take a slot from a good one
       ( check_dir "$partial" "$id" ) || { rm -rf "$partial" "$tarball"; exit 1; }
       mv "$partial" "$base/releases/$id"
