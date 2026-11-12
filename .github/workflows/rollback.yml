@@ -45,13 +45,15 @@ jobs:
           STAGING_RUNNER: ${{ vars.STAGING_RUNNER }}
           PRODUCTION_RUNNER: ${{ vars.PRODUCTION_RUNNER }}
         run: |
-          # The id ends up in a remote shell command, so only accept the release id format
+          # The id is passed to remote.sh on the server, so only accept the release id format
           if ! [[ "$RELEASE" =~ ^([0-9]{8}T[0-9]{6}Z-[0-9a-f]{7,40})?$ ]]; then
             echo "::error::'$RELEASE' is not a release id (expected e.g. 20261016T101500Z-c0bacf1)"
             exit 1
           fi
-          runner="$STAGING_RUNNER"
-          [ "$ENVIRONMENT" = production ] && runner="$PRODUCTION_RUNNER"
+          runner="$STAGING_RUNNER"; runner_var=STAGING_RUNNER
+          if [ "$ENVIRONMENT" = production ]; then runner="$PRODUCTION_RUNNER"; runner_var=PRODUCTION_RUNNER; fi
+          # The rollback job runs on the server itself (no SSH), so it needs that server's self-hosted runner
+          [ -n "$runner" ] || { echo "::error::Repository variable $runner_var is not set (e.g. self-hosted,<runner label>)"; exit 1; }
           echo "runner=$(.github/scripts/runner-json.sh "$runner")" >> "$GITHUB_OUTPUT"
 
   rollback:
@@ -73,44 +75,37 @@ jobs:
       RELEASE: ${{ inputs.release }}
       DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
       APP_URL: ${{ vars.APP_URL }}
+    # Runs on the target server's own runner, as the user that owns DEPLOY_PATH; no SSH
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: |
-            deploy
-            .github/actions
+          sparse-checkout: deploy
 
       - name: Check configuration
         run: |
           [ -n "$DEPLOY_PATH" ] || { echo "::error::Environment variable DEPLOY_PATH is not set"; exit 1; }
           [ -n "$APP_URL" ] || { echo "::error::Environment variable APP_URL is not set"; exit 1; }
+          [ -d "$DEPLOY_PATH" ] || { echo "::error::$DEPLOY_PATH does not exist on runner $RUNNER_NAME"; exit 1; }
+          [ -w "$DEPLOY_PATH" ] || { echo "::error::$DEPLOY_PATH is not writable by $(id -un), the user runner $RUNNER_NAME runs as"; exit 1; }
 
-      - uses: ./.github/actions/ssh-setup
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          user: ${{ secrets.DEPLOY_USER }}
-          port: ${{ vars.DEPLOY_PORT || '22' }}
-          private-key: ${{ secrets.DEPLOY_SSH_KEY }}
-          known-hosts: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-
-      - name: Upload the server script
+      - name: Refresh the server script
         run: |
-          $DEPLOY_SSH target "mkdir -p '$DEPLOY_PATH/incoming'"
-          $DEPLOY_SCP deploy/remote.sh "target:$DEPLOY_PATH/incoming/"
+          mkdir -p "$DEPLOY_PATH/incoming"
+          cp deploy/remote.sh "$DEPLOY_PATH/incoming/"
 
       - name: Releases on the server
         id: before
         run: |
-          $DEPLOY_SSH target "bash '$DEPLOY_PATH/incoming/remote.sh' list '$DEPLOY_PATH'" | tee "$RUNNER_TEMP/before.txt"
-          echo "release=$($DEPLOY_SSH target "bash '$DEPLOY_PATH/incoming/remote.sh' current '$DEPLOY_PATH'")" >> "$GITHUB_OUTPUT"
+          bash "$DEPLOY_PATH/incoming/remote.sh" list "$DEPLOY_PATH" | tee "$RUNNER_TEMP/before.txt"
+          echo "release=$(bash "$DEPLOY_PATH/incoming/remote.sh" current "$DEPLOY_PATH")" >> "$GITHUB_OUTPUT"
 
       - name: Roll back
         id: switch
         if: ${{ !inputs.list_only }}
         run: |
-          $DEPLOY_SSH target "DEPLOY_ACTOR='manual-rollback/$GITHUB_ACTOR' \
-            bash '$DEPLOY_PATH/incoming/remote.sh' rollback '$DEPLOY_PATH' '$RELEASE'"
-          echo "release=$($DEPLOY_SSH target "bash '$DEPLOY_PATH/incoming/remote.sh' current '$DEPLOY_PATH'")" >> "$GITHUB_OUTPUT"
+          DEPLOY_ACTOR="manual-rollback/$GITHUB_ACTOR" \
+            bash "$DEPLOY_PATH/incoming/remote.sh" rollback "$DEPLOY_PATH" "$RELEASE"
+          echo "release=$(bash "$DEPLOY_PATH/incoming/remote.sh" current "$DEPLOY_PATH")" >> "$GITHUB_OUTPUT"
 
       # No automatic undo here: a person chose this release, so a failure is reported for them to act on
       - name: Health check
@@ -136,13 +131,9 @@ jobs:
               echo "- By $GITHUB_ACTOR${REASON:+: $REASON}"
             fi
             echo '```'
-            $DEPLOY_SSH target "bash '$DEPLOY_PATH/incoming/remote.sh' list '$DEPLOY_PATH'" || echo "(could not list releases)"
+            bash "$DEPLOY_PATH/incoming/remote.sh" list "$DEPLOY_PATH" || echo "(could not list releases)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Remove SSH key
-        if: always()
-        run: rm -rf "${DEPLOY_SSH_DIR:-/nonexistent}"
 
   notify:
     name: Notify
