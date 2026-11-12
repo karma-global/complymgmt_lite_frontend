@@ -31,10 +31,12 @@ jobs:
           PRODUCTION_RUNNER: ${{ vars.PRODUCTION_RUNNER }}
         run: |
           case "$GITHUB_REF_NAME" in
-            develop) environment=staging;    mode=stage; runner="$STAGING_RUNNER" ;;
-            main)    environment=production; mode=prod;  runner="$PRODUCTION_RUNNER" ;;
+            develop) environment=staging;    mode=stage; runner="$STAGING_RUNNER";    runner_var=STAGING_RUNNER ;;
+            main)    environment=production; mode=prod;  runner="$PRODUCTION_RUNNER"; runner_var=PRODUCTION_RUNNER ;;
             *) echo "::error::Only develop (staging) and main (production) deploy; got $GITHUB_REF_NAME"; exit 1 ;;
           esac
+          # The deploy job runs on the server itself (no SSH), so it needs that server's self-hosted runner
+          [ -n "$runner" ] || { echo "::error::Repository variable $runner_var is not set (e.g. self-hosted,<runner label>)"; exit 1; }
           # UTC timestamp first, so release names sort by age on the server
           release="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_SHA::7}"
           {
@@ -124,47 +126,42 @@ jobs:
       DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
       APP_URL: ${{ vars.APP_URL }}
       KEEP_RELEASES: ${{ vars.KEEP_RELEASES || '5' }}
+    # The runner lives on the target server and runs as the user that owns DEPLOY_PATH,
+    # so every step below works on the local filesystem; nothing connects over SSH.
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: |
-            deploy
-            .github/actions
+          sparse-checkout: deploy
 
       - name: Check configuration
         run: |
           [ -n "$DEPLOY_PATH" ] || { echo "::error::Environment variable DEPLOY_PATH is not set"; exit 1; }
           [ -n "$APP_URL" ] || { echo "::error::Environment variable APP_URL is not set"; exit 1; }
+          [ -d "$DEPLOY_PATH" ] || { echo "::error::$DEPLOY_PATH does not exist on runner $RUNNER_NAME (run the one-time server setup)"; exit 1; }
+          [ -w "$DEPLOY_PATH" ] || { echo "::error::$DEPLOY_PATH is not writable by $(id -un), the user runner $RUNNER_NAME runs as"; exit 1; }
 
       - uses: actions/download-artifact@v4
         with:
           name: release-${{ needs.plan.outputs.release }}
           path: ${{ runner.temp }}/release
 
-      - uses: ./.github/actions/ssh-setup
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          user: ${{ secrets.DEPLOY_USER }}
-          port: ${{ vars.DEPLOY_PORT || '22' }}
-          private-key: ${{ secrets.DEPLOY_SSH_KEY }}
-          known-hosts: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-
-      - name: Upload release
+      # remote.sh is kept beside the releases so a person on the server can still roll back by hand
+      - name: Stage release
         run: |
-          $DEPLOY_SSH target "mkdir -p '$DEPLOY_PATH/incoming'"
-          $DEPLOY_SCP "$RUNNER_TEMP/release/$RELEASE.tar.gz" deploy/remote.sh "target:$DEPLOY_PATH/incoming/"
+          mkdir -p "$DEPLOY_PATH/incoming"
+          cp "$RUNNER_TEMP/release/$RELEASE.tar.gz" deploy/remote.sh "$DEPLOY_PATH/incoming/"
 
       - name: Note the live release
         id: before
         run: |
-          live="$($DEPLOY_SSH target "bash '$DEPLOY_PATH/incoming/remote.sh' current '$DEPLOY_PATH'")"
+          live="$(bash "$DEPLOY_PATH/incoming/remote.sh" current "$DEPLOY_PATH")"
           echo "release=$live" >> "$GITHUB_OUTPUT"
           echo "Live before this deploy: ${live:-none}"
 
       - name: Activate
         run: |
-          $DEPLOY_SSH target "DEPLOY_ACTOR='$GITHUB_ACTOR' KEEP_RELEASES='$KEEP_RELEASES' \
-            bash '$DEPLOY_PATH/incoming/remote.sh' activate '$DEPLOY_PATH' '$RELEASE' '$DEPLOY_PATH/incoming/$RELEASE.tar.gz'"
+          DEPLOY_ACTOR="$GITHUB_ACTOR" KEEP_RELEASES="$KEEP_RELEASES" \
+            bash "$DEPLOY_PATH/incoming/remote.sh" activate "$DEPLOY_PATH" "$RELEASE" "$DEPLOY_PATH/incoming/$RELEASE.tar.gz"
 
       - name: Health check
         run: bash deploy/healthcheck.sh "$APP_URL" "$RELEASE"
@@ -176,7 +173,7 @@ jobs:
         env:
           PREVIOUS: ${{ steps.before.outputs.release }}
         run: |
-          live="$($DEPLOY_SSH target "bash '$DEPLOY_PATH/incoming/remote.sh' current '$DEPLOY_PATH'")"
+          live="$(bash "$DEPLOY_PATH/incoming/remote.sh" current "$DEPLOY_PATH")"
           if [ "$live" != "$RELEASE" ]; then
             echo "Release $RELEASE never went live (live: ${live:-none}); nothing to roll back."
             exit 0
@@ -186,8 +183,8 @@ jobs:
             exit 1
           fi
           echo "::warning::Rolling back $RELEASE -> $PREVIOUS"
-          $DEPLOY_SSH target "DEPLOY_ACTOR='auto-rollback/$GITHUB_ACTOR' \
-            bash '$DEPLOY_PATH/incoming/remote.sh' rollback '$DEPLOY_PATH' '$PREVIOUS'"
+          DEPLOY_ACTOR="auto-rollback/$GITHUB_ACTOR" \
+            bash "$DEPLOY_PATH/incoming/remote.sh" rollback "$DEPLOY_PATH" "$PREVIOUS"
           bash deploy/healthcheck.sh "$APP_URL" "$PREVIOUS"
           echo "to=$PREVIOUS" >> "$GITHUB_OUTPUT"
 
@@ -210,15 +207,11 @@ jobs:
             echo
             echo "Releases on the server:"
             echo '```'
-            $DEPLOY_SSH target "bash '$DEPLOY_PATH/incoming/remote.sh' list '$DEPLOY_PATH'" || echo "(could not list releases)"
+            bash "$DEPLOY_PATH/incoming/remote.sh" list "$DEPLOY_PATH" || echo "(could not list releases)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Remove SSH key
-        if: always()
-        run: rm -rf "${DEPLOY_SSH_DIR:-/nonexistent}"
-
-  # Runs on a GitHub-hosted runner, so the staging server needs nothing extra for notifications
+  # Runs on a GitHub-hosted runner, so the servers need nothing extra for notifications
   notify:
     name: Notify
     needs: [plan, build, deploy]

@@ -12,8 +12,8 @@ PR into develop/main ──► CI: install · lint (no new errors) · build
 push to develop/main ──► Deploy: plan ─► build (once, with that env's VITE_* values)
                                               │  artifact: <release>.tar.gz (kept 30 days)
                                               ▼
-                         deploy (production waits for approval)
-                           upload ─► activate (switch `current` symlink) ─► health check
+                         deploy, on the server's own runner (production waits for approval)
+                           stage ─► activate (switch `current` symlink) ─► health check
                                                                                │ fails
                                                                                ▼
                                                      automated rollback to the release live before
@@ -21,6 +21,11 @@ push to develop/main ──► Deploy: plan ─► build (once, with that env's 
 
 The servers serve **static files** (nginx); no Node process runs on them. A release is a directory, and
 going live or rolling back is an atomic symlink switch, so neither needs a web server restart or sudo.
+
+**No SSH.** Every server runs its own self-hosted GitHub Actions runner for this repo, as the user that
+owns `DEPLOY_PATH`. The deploy and rollback jobs run there and call `deploy/remote.sh` on the local
+filesystem. The runner only makes outbound HTTPS connections to GitHub, so no inbound port, SSH key or
+host key is involved. Building and notifications stay on GitHub-hosted runners.
 
 ## Files
 
@@ -31,11 +36,10 @@ going live or rolling back is an atomic symlink switch, so neither needs a web s
 | `.github/workflows/rollback.yml` | Manual rollback (or just list releases) for either environment. |
 | `.github/workflows/push-alert.yml` | Loud notice for every push to `develop`/`main` (direct and force pushes flagged). |
 | `.github/scripts/notify.sh` | Sends a message to Slack, Teams and/or email, whichever is configured. |
-| `.github/actions/ssh-setup` | Writes the deploy key and pinned host key under the runner's temp dir. |
 | `.github/scripts/lint-ratchet.sh` | Fails a PR only if it adds ESLint errors (the codebase still has ~330 old ones). |
-| `.github/scripts/runner-json.sh` | Turns `STAGING_RUNNER`/`PRODUCTION_RUNNER` into a `runs-on` value. |
-| `deploy/remote.sh` | Runs on the server: `activate`, `rollback`, `list`, `current`. Uploaded on every run. |
-| `deploy/healthcheck.sh` | Runs on the runner: waits for `/version.json` to report the new release, then checks it stays healthy. |
+| `.github/scripts/runner-json.sh` | Turns `STAGING_RUNNER`/`PRODUCTION_RUNNER` (the server's runner labels) into a `runs-on` value. |
+| `deploy/remote.sh` | Runs on the server: `activate`, `rollback`, `list`, `current`. Copied to `DEPLOY_PATH/incoming/` on every run. |
+| `deploy/healthcheck.sh` | Runs on the server's runner: waits for `APP_URL/version.json` to report the new release, then checks it stays healthy. |
 | `deploy/nginx/complymgmt_lite.conf` | Example nginx site (SPA fallback, caching, old-chunk fallback). |
 | `deploy/nginx/staging.conf` | The staging site `http://complymgmt-lite.staging.kmc.com`: built files, `/api/` to the backend, HTTPS block ready. Template for other staging apps. |
 | `deploy/nginx/00-default.conf` | Staging catch-all: closes connections for names no site claims. Once per server. |
@@ -77,8 +81,8 @@ A build that is broken never goes live in the first place: `remote.sh` refuses a
    problem back.
 
 On the server itself (e.g. GitHub is down), as the user that owns `DEPLOY_PATH` (`webdeploy` on
-staging): `sudo -u webdeploy bash $DEPLOY_PATH/incoming/remote.sh list $DEPLOY_PATH`, then
-`... rollback $DEPLOY_PATH [<release-id>]`.
+staging, `deploy` on production): `sudo -u webdeploy bash $DEPLOY_PATH/incoming/remote.sh list $DEPLOY_PATH`,
+then `... rollback $DEPLOY_PATH [<release-id>]`.
 
 ## One-time server setup (each server, cloud or on-prem)
 
@@ -86,31 +90,39 @@ Any Linux server with nginx (or any web server that can serve a directory and fa
 `index.html`). Staging and production can share a host with different `DEPLOY_PATH`s and server names.
 
 ```bash
-# 1. A deploy user that owns the app directory (no sudo needed for deploys)
-sudo useradd --create-home --shell /bin/bash deploy        # or reuse an existing user
+# 1. A deploy user that owns the app directory (no sudo needed for deploys). Reuse the server's
+#    existing deploy user if it has one (production reuses `deploy`, which also deploys the backend).
+sudo useradd --create-home --shell /bin/bash deploy        # only if there is none yet
 sudo mkdir -p /var/www/complymgmt_lite
 sudo chown deploy:deploy /var/www/complymgmt_lite
 #    nginx (user nginx / www-data) must be able to read it:
 sudo chmod 755 /var/www/complymgmt_lite
 
-# 2. A key just for CI (on your machine), authorised for the deploy user. ECDSA, not ed25519: a server
-#    in FIPS mode (like staging) rejects ed25519 keys without saying why ("Permission denied (publickey)")
-ssh-keygen -t ecdsa -b 256 -N '' -C "github-actions complymgmt_lite <env>" -f ./complymgmt_lite_<env>
-sudo -u deploy mkdir -p ~deploy/.ssh && sudo -u deploy chmod 700 ~deploy/.ssh
-cat ./complymgmt_lite_<env>.pub | sudo -u deploy tee -a ~deploy/.ssh/authorized_keys
-#    Optional hardening in authorized_keys: from="<runner IPs>",no-port-forwarding,no-pty ecdsa-sha2-nistp256 ...
-
-# 3. nginx site
+# 2. nginx site: root is DEPLOY_PATH/current
 sudo cp deploy/nginx/complymgmt_lite.conf /etc/nginx/conf.d/complymgmt_lite.conf   # edit server_name/TLS/root
 sudo nginx -t && sudo systemctl reload nginx
 #    RHEL/Fedora with SELinux: let nginx read the directory
 sudo semanage fcontext -a -t httpd_sys_content_t '/var/www/complymgmt_lite(/.*)?' && sudo restorecon -R /var/www/complymgmt_lite
 
-# 4. The host key to pin in GitHub (run from a trusted network, check the fingerprint)
-ssh-keyscan -p 22 <host>
+# 3. A GitHub Actions runner for this repo, running as the deploy user. A repo admin gets the token from
+#    Settings -> Actions -> Runners -> New self-hosted runner (or:
+#    gh api -X POST repos/karma-global/complymgmt_lite_frontend/actions/runners/registration-token --jq .token)
+#    A runner registered for another repo (e.g. the backend's) can't take this repo's jobs, so add a
+#    second one in its own directory, even when it runs as the same user.
+sudo -iu deploy
+mkdir actions-runner-frontend && cd actions-runner-frontend
+# curl + tar lines from the GitHub page, then:
+./config.sh --url https://github.com/karma-global/complymgmt_lite_frontend --token <TOKEN> \
+  --name complymgmt-frontend-<env> --labels complymgmt-frontend-<env> --unattended
+exit
+cd ~deploy/actions-runner-frontend && sudo ./svc.sh install deploy && sudo ./svc.sh start
+
+# 4. The health check runs on this server, so APP_URL must answer from here
+curl -sI <APP_URL>     # if it doesn't (no hairpin NAT / internal DNS): 127.0.0.1 <host> in /etc/hosts
 ```
 
-Server needs: `bash`, `tar`, `flock` (util-linux), and GNU `mv` (`-T`). No Node.js.
+Server needs: `bash`, `tar`, `flock` (util-linux), GNU `mv` (`-T`) and `curl`. No Node.js (the runner
+brings its own).
 
 ## Staging server (on-prem, shared): `http://complymgmt-lite.staging.kmc.com`
 
@@ -178,21 +190,8 @@ sudo cp ~/staging.conf /etc/nginx/conf.d/complymgmt-lite.conf
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-**4. SSH key for the runner** (runner and server are the same machine, so the key only works from localhost).
-The server runs in FIPS mode (`cat /proc/sys/crypto/fips_enabled` → 1), so sshd accepts only ECDSA and
-RSA keys; an ed25519 key fails with a bare "Permission denied (publickey)".
-
-```bash
-sudo -iu webdeploy
-ssh-keygen -t ecdsa -b 256 -N '' -f ~/.ssh/ci_deploy -C "github-actions complymgmt_lite staging"
-echo "from=\"127.0.0.1\" $(cat ~/.ssh/ci_deploy.pub)" >> ~/.ssh/authorized_keys
-chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys
-ssh-keyscan 127.0.0.1    # -> DEPLOY_KNOWN_HOSTS
-cat ~/.ssh/ci_deploy     # -> DEPLOY_SSH_KEY, then: rm ~/.ssh/ci_deploy ~/.ssh/ci_deploy.pub
-exit
-```
-
-**5. Runner for this repo.** The runner already on the server (`deploy` user) is registered to the
+**4. Runner for this repo** (the deploy job runs here, as `webdeploy`, and writes the files directly;
+there is no SSH). The runner already on the server (`deploy` user) is registered to the
 backend repo alone (`karma-global/complymgmt_lite`) and can't take this repo's jobs. Don't re-register
 it for the whole organization to share it either: it runs as a member of the `docker` group (root in
 effect), which jobs from a public repo should never get. A repo admin opens *Settings → Actions →
@@ -212,25 +211,22 @@ cd /home/webdeploy/actions-runner-frontend && sudo ./svc.sh install webdeploy &&
 If the service won't start under SELinux, label it: `sudo semanage fcontext -a -t bin_t
 '/home/webdeploy/actions-runner-frontend/runsvc.sh' && sudo restorecon -v .../runsvc.sh`.
 
-**6. API through nginx.** The site's `/api/` goes to the staging backend on `127.0.0.1:9001` with the
+**5. API through nginx.** The site's `/api/` goes to the staging backend on `127.0.0.1:9001` with the
 `/api` prefix removed; the app's own paths keep theirs, so `/api/api/v1/login` arrives as
-`/api/v1/login`. Build with `VITE_API_BASE_URL=/api` (step 7). Requests are then same-origin, so the
+`/api/v1/login`. Build with `VITE_API_BASE_URL=/api` (step 6). Requests are then same-origin, so the
 backend's `CORS_ALLOWED_ORIGINS` needs nothing for staging. Uploads up to 100 MB pass nginx (the
 backend's own limit is 50 MB).
 
-**7. GitHub values** (see *GitHub setup* below for where they go):
+**6. GitHub values** (see *GitHub setup* below for where they go):
 
 | Name | Value |
 |------|-------|
 | `STAGING_ENV_FILE` (repo secret) | `/var/www/complymgmt_lite.vite-old/.env.stage` with `VITE_API_BASE_URL=/api` |
 | `STAGING_RUNNER` (repo variable) | `self-hosted,complymgmt-frontend-staging` |
-| `DEPLOY_HOST` | `127.0.0.1` |
-| `DEPLOY_USER` | `webdeploy` |
-| `DEPLOY_SSH_KEY` / `DEPLOY_KNOWN_HOSTS` | From step 4 |
 | `DEPLOY_PATH` | `/var/www/complymgmt_lite` |
 | `APP_URL` | `http://complymgmt-lite.staging.kmc.com` |
 
-**8. First deploy.** *Actions → Deploy → Run workflow* on `develop` (or merge into `develop`). When it
+**7. First deploy.** *Actions → Deploy → Run workflow* on `develop` (or merge into `develop`). When it
 is green, `curl http://complymgmt-lite.staging.kmc.com/version.json` shows the release, a POST to
 `/api/api/v1/login` with no body gets the backend's JSON error, and the old
 `/var/www/complymgmt_lite.vite-old` folder can go.
@@ -238,6 +234,45 @@ is green, `curl http://complymgmt-lite.staging.kmc.com/version.json` shows the r
 HTTPS: once the internal CA issues the shared `*.staging.kmc.com` certificate, enable the 443 blocks
 in `deploy/nginx/00-default.conf` and `deploy/nginx/staging.conf`, and set `APP_URL` to
 `https://complymgmt-lite.staging.kmc.com`.
+
+## Production server: `https://complymgmt.ai`
+
+`prod-server` (Azure VM, Ubuntu 24.04) already runs nginx with TLS for `complymgmt.ai` and the backend
+`api.complymgmt.ai`. The frontend reuses the server's `deploy` user, which already deploys the backend
+through its own runner (`~deploy/actions-runner`, backend repo only).
+
+**1. Runner for this repo**, as `deploy`, in `~deploy/actions-runner-frontend` (step 3 of *One-time
+server setup*), with name and label `complymgmt-frontend-production`.
+
+**2. Turn the hand-copied build into the first release.** Before the pipeline, `/var/www/complymgmt_lite`
+held a build copied there by hand, which nginx served directly. Packaging it as a release keeps the site
+up through the switch and gives the first pipeline deploy something to roll back to:
+
+```bash
+sudo chown -R deploy:deploy /var/www/complymgmt_lite
+sudo -iu deploy
+id=20261008T151609Z-9eda8c2          # when it was copied, and main at the time
+tmp=$(mktemp -d)
+cp -a /var/www/complymgmt_lite/{assets,index.html,vite.svg} "$tmp/"
+printf '{"release":"%s","commit":"9eda8c2","branch":"main","builtAt":"2026-10-08T15:16:09Z","run":"hand-copied before the pipeline"}\n' "$id" > "$tmp/version.json"
+tar -czf "/tmp/$id.tar.gz" -C "$tmp" . && rm -rf "$tmp"
+curl -fsSLo /tmp/remote.sh https://raw.githubusercontent.com/karma-global/complymgmt_lite_frontend/develop/deploy/remote.sh
+bash /tmp/remote.sh activate /var/www/complymgmt_lite "$id" "/tmp/$id.tar.gz"
+exit
+```
+
+**3. Point nginx at `current`.** In `/etc/nginx/sites-available/complymgmt.ai.conf` (back it up first),
+change `root /var/www/complymgmt_lite/;` to `root /var/www/complymgmt_lite/current;` and add
+`location = /version.json { add_header Cache-Control "no-store"; }`. Then
+`sudo nginx -t && sudo systemctl reload nginx`. `curl https://complymgmt.ai/version.json` should now show
+the release from step 2, and the site should look the same. After that, the old top-level `assets/`,
+`index.html` and `vite.svg` can be deleted.
+
+**4. GitHub values.** `PRODUCTION_ENV_FILE` (repo secret) is `.env.prod`
+(`VITE_API_BASE_URL=https://api.complymgmt.ai/`). `PRODUCTION_RUNNER` (repo variable) is
+`self-hosted,complymgmt-frontend-production`. On the `production` environment, set `DEPLOY_PATH` to
+`/var/www/complymgmt_lite` and `APP_URL` to `https://complymgmt.ai`, plus required reviewers and the
+`main` branch rule.
 
 ## GitHub setup
 
@@ -252,18 +287,23 @@ These are repository secrets (not environment secrets) so the build can run befo
 Remember that every `VITE_*` value ends up in the public JavaScript bundle; nothing in these files is
 hidden from users, so never put server-side secrets there.
 
-**Settings → Environments**: create `staging` and `production`, each with:
+**Settings → Variables → Actions → Repository variables**
 
-| Kind | Name | Value |
-|------|------|-------|
-| secret | `DEPLOY_HOST` | Server host name or IP (as reachable from the runner) |
-| secret | `DEPLOY_USER` | `deploy` |
-| secret | `DEPLOY_SSH_KEY` | Private key from step 2 |
-| secret | `DEPLOY_KNOWN_HOSTS` | Output of `ssh-keyscan` from step 4 |
-| variable | `DEPLOY_PATH` | `/var/www/complymgmt_lite` |
-| variable | `APP_URL` | Public URL the health check hits, e.g. `https://stage.example.com` |
-| variable | `DEPLOY_PORT` | Optional, default `22` |
-| variable | `KEEP_RELEASES` | Optional, default `5` |
+| Variable | Value |
+|----------|-------|
+| `STAGING_RUNNER` | Labels of the staging server's runner, e.g. `self-hosted,complymgmt-frontend-staging` |
+| `PRODUCTION_RUNNER` | Labels of the production server's runner, e.g. `self-hosted,complymgmt-frontend-production` |
+
+Required: a deploy or rollback stops at *Plan* when its runner variable is empty.
+
+**Settings → Environments**: create `staging` and `production`, each with these variables (no secrets:
+the runner is already on the server, as the right user):
+
+| Variable | Value |
+|----------|-------|
+| `DEPLOY_PATH` | `/var/www/complymgmt_lite` |
+| `APP_URL` | URL the health check hits **from the server**, e.g. `https://complymgmt.ai` |
+| `KEEP_RELEASES` | Optional, default `5` |
 
 On **production** also set:
 - *Required reviewers*: who approves production deploys (and production rollbacks, since the Rollback
@@ -273,8 +313,8 @@ On **production** also set:
 
 **Fork pull requests** (Settings → Actions → General → *Fork pull request workflows from outside
 collaborators*): choose **Require approval for all outside collaborators**. The repo is public, and a
-fork's PR runs its own copy of the workflows, which could otherwise target the self-hosted runner on
-the staging server.
+fork's PR runs its own copy of the workflows, which could otherwise target the self-hosted runners on
+the staging and production servers.
 
 ## Notifications (instead of branch protection)
 
@@ -315,21 +355,15 @@ already visible (commits, pusher, release ids, deploy results).
 GitHub's built-in emails still apply on top: whoever triggers a failed run gets an email (default
 setting), and anyone can *Watch → Custom → Pull requests* to hear about PRs.
 
-## Cloud or on-prem: where the deploy job runs
+## Where each job runs
 
-Repository variables `STAGING_RUNNER` and `PRODUCTION_RUNNER` (Settings → Variables) choose it:
+| Job | Runner |
+|-----|--------|
+| CI, Plan, Build, Notify | GitHub-hosted (`ubuntu-latest`); Node.js and the build never touch the servers |
+| Deploy, Rollback | The target server's own self-hosted runner (`STAGING_RUNNER` / `PRODUCTION_RUNNER`) |
 
-- **Empty / `ubuntu-latest`** (default): GitHub's runners SSH to the server. The server's SSH port must
-  be reachable from the internet (restrict it to [GitHub's IP ranges](https://api.github.com/meta) or
-  use a bastion), and `APP_URL` must be publicly reachable for the health check.
-- **Self-hosted runner** for servers inside an office/datacenter network with no inbound access:
-  install a [GitHub Actions runner](https://docs.github.com/actions/hosting-your-own-runners) on any
-  machine in that network (it only makes outbound HTTPS connections to GitHub), give it a label, and
-  set e.g. `PRODUCTION_RUNNER=self-hosted,onprem`. The runner needs `bash`, `ssh`, `scp`, `curl` and
-  `tar`; `DEPLOY_HOST` and `APP_URL` can then be internal addresses. The build still runs on
-  GitHub-hosted runners, so the on-prem machine needs no Node.js.
-
-Each environment picks independently, e.g. staging in the cloud and production on-prem.
+A server only needs outbound HTTPS to GitHub; nothing connects into it. That works the same for a cloud
+VM and for an on-prem box on a private network (like staging).
 
 ## Verifying a setup
 
