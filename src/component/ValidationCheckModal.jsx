@@ -10,11 +10,6 @@ const ValidationCheckModal = ({
 }) => {
   const modalRef = useRef();
 
-  const handleBackdropClick = (e) => {
-    if (modalRef.current && !modalRef.current.contains(e.target)) {
-      closeModal();
-    }
-  };
 
   return (
     <>

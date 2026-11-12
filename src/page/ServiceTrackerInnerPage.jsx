@@ -756,12 +756,15 @@ const ServiceTrackerInnerPage = () => {
     //     }, [formattedTrackerName, current?.sheet_name]);
 
     // last updated code
+    const hasRows = rowData.length > 0;
     useEffect(() => {
         if (!canViewTracker) return;
-        if ((formattedTrackerName && current?.sheet_name) || rowData.length > 0) {
+        if ((formattedTrackerName && current?.sheet_name) || hasRows) {
             fetchAndSetTrackerData(formattedTrackerName, current.sheet_name);
         }
-    }, [formattedTrackerName, current?.sheet_name, rowData.length > 0, canViewTracker]);
+    // fetchAndSetTrackerData is recreated on every render; listing it would refetch in a loop
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [formattedTrackerName, current?.sheet_name, hasRows, canViewTracker]);
 
 
 
@@ -794,7 +797,7 @@ const ServiceTrackerInnerPage = () => {
                             firstSheet.name
                         );
                         setRowData(filterUpdateData);
-                    } catch (error) {
+                    } catch {
                         // console.error("Error fetching default sheet data:", error);
                     }
 
@@ -813,7 +816,7 @@ const ServiceTrackerInnerPage = () => {
         };
 
         fetchData();
-    }, [current, canViewTracker]);
+    }, [current, canViewTracker, formattedTrackerName]);
 
     const onFilterOpened = (params) => {
         const field = params.column.getColId();
@@ -854,9 +857,8 @@ const ServiceTrackerInnerPage = () => {
         const checkboxes = filterDiv.querySelectorAll('.form-check-input');
 
         checkboxes.forEach(checkbox => {
-            checkbox.addEventListener('change', (e) => {
+            checkbox.addEventListener('change', () => {
                 const checkedValues = Array.from(filterDiv.querySelectorAll('.form-check-input:checked')).map(checkbox => checkbox.value);
-                const filterInput = filterComponent[0].querySelectorAll('input[type="text"]');
 
                 const conditions = checkedValues.map(val => ({
                     filterType: 'text',
@@ -1111,7 +1113,7 @@ const ServiceTrackerInnerPage = () => {
                                     try {
                                         // Call fetchAndSetTrackerData with selectedName filter
                                         await fetchAndSetTrackerData(formattedTrackerName, selectedName || null);
-                                    } catch (error) {
+                                    } catch {
                                         // console.error("Error fetching service tracker data:", error);
                                     }
                                 }}

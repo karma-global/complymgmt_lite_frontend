@@ -142,11 +142,6 @@ export default function ServiceTrackerAccess() {
             (checkedValues[selectedKey] || []).includes(v)
         )
 
-    const totalSelected = Object.values(checkedValues).reduce(
-        (sum, arr) => sum + arr.length,
-        0
-    )
-
     const allCheckedEntries = []
     Object.entries(checkedValues).forEach(([key, values]) => {
         values.forEach((v) => allCheckedEntries.push({ key, value: v }))

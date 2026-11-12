@@ -44,19 +44,6 @@ function DashboardDrawerGridDetailPage({ rowData: rawRows, filters = {} }) {
     headerStyle: { color: "#515151", backgroundColor: "#ffffe24d" },
   };
 
-  const onPaginationChanged = () => {
-    if (gridRef.current) {
-      const currentPage = gridRef.current.api.paginationGetCurrentPage();
-      const pageSize = gridRef.current.api.paginationGetPageSize();
-
-      // AG Grid page index 0 se start hota hai
-      const page = currentPage + 1;
-
-
-      // Yaha API call karo
-      // fetchData(page, pageSize);
-    }
-  };
   return (
     <div className="app-container">
       <div className="app-wrapper">
@@ -76,7 +63,6 @@ function DashboardDrawerGridDetailPage({ rowData: rawRows, filters = {} }) {
               defaultColDef={defaultColDef}
               pagination={true}
               paginationPageSize={20}
-              onPaginationChanged={onPaginationChanged}
             />
           </div>
         </div>

@@ -357,7 +357,7 @@ const NavigationTabs = ({ selectedCompany, setSelectedCompany, setActiveTitle })
             setWidgetsLoaded(true);
         };
         fetchWidgetsListData();
-    }, [selectedCompany]);
+    }, [selectedCompany, userId]);
     // Which tabs exist depends on the widget list, so wait for it rather than flash tabs in and out
     if (!widgetsLoaded) {
         return (

@@ -124,7 +124,7 @@ const RegisterProcessingViewPage = () => {
         setLocationName(locationNameData || []);
         const registerNameData = await fetchAllRegisterNames();
         setRegisterName(registerNameData || []);
-      } catch (error) {
+      } catch {
         // console.error("Error fetching data:", error);
       }
     };
@@ -148,14 +148,14 @@ const RegisterProcessingViewPage = () => {
                     );
                     setSteps(pipelineData?.config?.steps || []);
                     setIsEditing(pipelineData?.config?.steps?.length > 0);
-                } catch (error) {
+                } catch {
                     setSteps([]);
                     setIsEditing(false);
                 }
             };
             fetchPipeline();
         }
-    }, [isModalOpen]);
+    }, [isModalOpen, current?.applicability_id]);
     useEffect(() => {
         const fetchCompany = async () => {
             const data = await fetchCompaniesNameByGroupId(current?.group_holding_id);
@@ -290,62 +290,63 @@ const RegisterProcessingViewPage = () => {
     setIsDeleteModalOpen(false)
   };
 
-  const actionCol = {
-    flex: 0,
-    width: 130,
-    minWidth: 130,
-    maxWidth: 130,
-    headerName: 'Actions',
-    field: 'actions',
-    pinned: 'left',
-    cellStyle: { backgroundColor: 'rgb(252 229 205 / 64%)' },
-    editable: false,
-    cellRenderer: (params) => (
-      <div className="d-flex justify-content-around align-items-center">
-        <button
-          className="btn btn-sm"
-          onClick={() => {
-            setIsEditing(true);
-            setApplicabilityModal(true);
-            setCurrent((prev) => ({
-              ...prev,
-              applicability_id: params.data.applicability_id,
-            }));
-          }}
-        >
-          <EditIcon fontSize="small" className="action_icon" />
-        </button>
-
-        <button
-          className="btn btn-sm"
-          onClick={() => {
-            setCurrent((prev) => ({
-              ...prev,
-              applicability_id: params.data.applicability_id,
-            }));
-            setIsModalOpen(true);
-          }}
-        >
-          <Plus fontSize="small" className="action_icon" />
-        </button>
-        <button
-          className="btn btn-sm"
-          onClick={() => {
-            setCurrent((prev) => ({
-              ...prev,
-              applicability_id: params.data.applicability_id,
-            }));
-            setIsDeleteModalOpen(true);
-          }}
-        >
-          <DeleteIcon fontSize="small" className="action_icon" />
-        </button>
-      </div>
-    )
-  };
-
   const columnDefs = useMemo(() => {
     if (!data.length) return [];
+
+    const actionCol = {
+      flex: 0,
+      width: 130,
+      minWidth: 130,
+      maxWidth: 130,
+      headerName: 'Actions',
+      field: 'actions',
+      pinned: 'left',
+      cellStyle: { backgroundColor: 'rgb(252 229 205 / 64%)' },
+      editable: false,
+      cellRenderer: (params) => (
+        <div className="d-flex justify-content-around align-items-center">
+          <button
+            className="btn btn-sm"
+            onClick={() => {
+              setIsEditing(true);
+              setApplicabilityModal(true);
+              setCurrent((prev) => ({
+                ...prev,
+                applicability_id: params.data.applicability_id,
+              }));
+            }}
+          >
+            <EditIcon fontSize="small" className="action_icon" />
+          </button>
+
+          <button
+            className="btn btn-sm"
+            onClick={() => {
+              setCurrent((prev) => ({
+                ...prev,
+                applicability_id: params.data.applicability_id,
+              }));
+              setIsModalOpen(true);
+            }}
+          >
+            <Plus fontSize="small" className="action_icon" />
+          </button>
+          <button
+            className="btn btn-sm"
+            onClick={() => {
+              setCurrent((prev) => ({
+                ...prev,
+                applicability_id: params.data.applicability_id,
+              }));
+              setIsDeleteModalOpen(true);
+            }}
+          >
+            <DeleteIcon fontSize="small" className="action_icon" />
+          </button>
+        </div>
+      )
+    };
+
 
     return [
       actionCol,

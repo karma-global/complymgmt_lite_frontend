@@ -7,7 +7,7 @@ import MuiTextField from '../component/MuiInputs/MuiTextField';
 import AddIcon from '@mui/icons-material/Add';
 import SmallSizeModal from '../component/SmallSizeModal';
 import SingleSelectTextField from '../component/MuiInputs/SingleSelectTextField';
-import { bulkApproveAllPageData, createLocation, deleteLocationById, fetchAllGroupHolding, fetchAllLocation, fetchCompaniesNameByGroupId, fetchEntityById, updateLocationById, updateLocationStatusById, updateCompanyApprovalStatusById, updateCompanyLocationApprovalStatusById, } from '../api/service';
+import { bulkApproveAllPageData, createLocation, deleteLocationById, fetchAllGroupHolding, fetchAllLocation, fetchCompaniesNameByGroupId, fetchEntityById, updateLocationById, updateLocationStatusById, updateCompanyLocationApprovalStatusById, } from '../api/service';
 import DeleteModal from '../component/DeleteModal';
 import Snackbars from '../component/Snackbars';
 import { AgGridReact } from 'ag-grid-react';
@@ -44,7 +44,6 @@ const Location = () => {
     const [isEditing, setIsEditing] = useState(false);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [groupHoldingData, setGroupHoldinData] = useState([])
-    const [companyNameData, setCompanyNameData] = useState([])
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
     const [issnackbarsOpen, setIsSnackbarsOpen] = useState({
         open: false,
@@ -524,16 +523,6 @@ const Location = () => {
         )
     }
 
-    const getRoleColorForFileStatus = (status) => {
-        switch (status) {
-            case 1:
-                return { color: '#4CAF50' }; // green
-            case 0:
-                return { color: '#F44336' }; // brown
-            default:
-                return { color: '#41464b' }; // gray
-        }
-    };
 
     const handleCheckboxClick = async (rowId) => {
         const response = await updateCompanyLocationApprovalStatusById(rowId);

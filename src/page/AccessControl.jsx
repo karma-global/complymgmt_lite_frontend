@@ -884,14 +884,6 @@ const AccessControl = () => {
               value={current?.entity_name}
               isdisable={isEditing ? true : false}
               onChange={async (e) => {
-                const selectedEntity = e.target.value;
-
-                const matchedEntity =
-                  entityData.find((entity) => entity.name === selectedEntity) ||
-                  {};
-
-                const selectedEntityId = matchedEntity.id || null;
-
                 setCurrent((prev) => ({
                   ...prev,
                   entity_name: e.target.value,
@@ -1685,6 +1677,9 @@ const AccessControl = () => {
     };
 
     fetchData();
+  // Loads the page once on mount; `current` here is only the initial form state. Re-running on form
+  // edits would refetch all eight endpoints and overwrite the table.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // fetch company by group id

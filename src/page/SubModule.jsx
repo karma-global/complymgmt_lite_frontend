@@ -39,7 +39,6 @@ const SubModule = () => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
     const [subModuleId, setSubModuleId] = useState(null)
-    const [moduleId, setModuleId] = useState(null)
     const [errors, setErrors] = useState({});
     const [issnackbarsOpen, setIsSnackbarsOpen] = useState({
         open: false,
@@ -293,30 +292,6 @@ const SubModule = () => {
 
     }
 
-    const getRoleColor = (role) => {
-        switch (role) {
-            case 'Admin':
-                return { background: '#d1e7dd', color: '#0f5132' }; // green
-            case 'Manager':
-                return { background: '#cff4fc', color: '#055160' }; // blue
-            case 'Client':
-                return { background: '#fce5cd', color: '#7f4f24' }; // brown
-            case 'Super Admin':
-                return { background: '#f8d7da', color: '#842029' }; // red
-            default:
-                return { background: '#e2e3e5', color: '#41464b' }; // gray
-        }
-    };
-    const getRoleColorForFileStatus = (status) => {
-        switch (status) {
-            case 1:
-                return { color: '#4CAF50' }; // green
-            case 0:
-                return { color: '#F44336' }; // brown
-            default:
-                return { color: '#41464b' }; // gray
-        }
-    };
 
     const handleCheckboxClick = async (id) => {
         try {
@@ -476,7 +451,6 @@ const SubModule = () => {
                                 setIsEditing(true);
                                 setIsModalOpen(true);
                                 setSubModuleId(params.data._id); // OR .user_id based on your data
-                                setModuleId(params.data.module_id)
                             }}
                         >
                             <EditIcon fontSize="small" className="action_icon" />
@@ -526,7 +500,7 @@ const SubModule = () => {
         editable: true,
         headerStyle: { color: '#515151', backgroundColor: '#ffffe24d' },
     };
-    const onRowValueChanged = (event) => {
+    const onRowValueChanged = () => {
     };
     useEffect(() => {
         const fetchData = async () => {

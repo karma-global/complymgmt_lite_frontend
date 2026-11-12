@@ -9,14 +9,9 @@ export const AnimatedSearchBar = ({
     onInput
 
 }) => {
-    const [isExpanded, setIsExpanded] = useState(true);
+    const [isExpanded] = useState(true);
     // const [query, setQuery] = useState('');
     const inputRef = useRef(null);
-    const handleClear = () => {
-        setQuery('');
-        setIsExpanded(true);
-        inputRef.current?.blur();
-    };
 
     return (
         <div className={`search-container ${isExpanded ? 'expanded' : ''}`}>

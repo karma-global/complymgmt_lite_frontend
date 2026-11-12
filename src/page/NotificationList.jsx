@@ -8,11 +8,9 @@ import DeleteModal from '../component/DeleteModal';
 import Toggle from '../component/Toggle';
 // import MultipleSelectTextFields from '../component/MuiInputs/MultipleSelectTextFields';
 // import SingleSelectTextField from '../component/MuiInputs/SingleSelectTextField';
-import { useParams } from "react-router-dom";
 const NotificationList = () => {
   // Your JSON data
   const [templates, setTemplates] = useState([]);
-  const [notifications, setNotifications] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('all');
   const [filterPriority, setFilterPriority] = useState('all');
@@ -31,7 +29,6 @@ const NotificationList = () => {
     message: '',
     severityType: '',
   });
-  const { template_id } = useParams();
   const filteredTemplates = templates?.filter(template => {
     const matchesSearch = template.template_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       template.template_subject?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -77,11 +74,6 @@ const NotificationList = () => {
 
   };
 
-  const handleCreateNotification = (template) => {
-    setEditingId(template._id);
-    setEditForm({ ...template });
-    setIsNotificationCreated(true);
-  };
   // Save Template form
   const handleSaveTemplate = async (e) => {
     e.preventDefault();
@@ -312,14 +304,7 @@ const NotificationList = () => {
   useEffect(() => {
     fetchAllNotificationTemplates().then(data => {
       setTemplates(data);
-    }).catch(err => {
-      // console.error('Error fetching notifications:', err);
-    });
-  }, []);
-  useEffect(() => {
-    fetchAllNotifications().then(data => {
-      setNotifications(data);
-    }).catch(err => {
+    }).catch(() => {
       // console.error('Error fetching notifications:', err);
     });
   }, []);

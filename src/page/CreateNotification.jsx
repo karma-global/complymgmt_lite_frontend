@@ -7,7 +7,6 @@ import {
   Upload,
 } from "lucide-react";
 import "../style/notificationList.css";
-import { useNavigate, useParams } from "react-router-dom";
 import {
   bulkApproveAllPageData,
   createNotification,
@@ -44,7 +43,6 @@ import { decryptData } from "./utils/encrypt";
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const CreateNotification = () => {
-  const [templates, setTemplates] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [editForm, setEditForm] = useState({});
   const [selectedDate, setSelectedDate] = useState(dayjs());
@@ -62,7 +60,6 @@ const CreateNotification = () => {
   const [locationName, setLocationName] = useState([])
   const [templateName, setTemplateName] = useState([]);
   const [userName, setUserName] = useState([]);
-  const [errors, setErrors] = useState({});
   const [isEditing, setIsEditing] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isFileUploadModalOpen, setIsFileUploadModalOpen] = useState(false);
@@ -82,13 +79,6 @@ const CreateNotification = () => {
     []
   );
 
-  // ✅ Fetch templates
-  useEffect(() => {
-    fetchAllNotificationTemplates()
-      .then((data) => setTemplates(data))
-      .catch();
-  }, []);
-
   // ✅ Fetch notifications
   useEffect(() => {
     fetchAllNotifications()
@@ -103,7 +93,6 @@ const CreateNotification = () => {
     if (!editForm.template_name) newErrors.template_name = 'Template Name is required';
     if (!editForm.priority) newErrors.priority = 'Template Priority is required';
     if (!editForm.send_to || editForm.send_to.length === 0) newErrors.send_to = 'At least one recipient is required';
-    setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
   const priorities = [
@@ -124,7 +113,7 @@ const CreateNotification = () => {
           setUserName(results[1].value);
         }
 
-        results.forEach((result, idx) => {
+        results.forEach((result) => {
           if (result.status === "rejected") {
             // // console.error(`Error fetching data at index ${idx}:`, result.reason);
           }
@@ -372,7 +361,6 @@ const CreateNotification = () => {
   const closeModal = () => {
     setIsModalOpen(false);
     setIsEditing(false);
-    setErrors({});
     setEditForm({});
     setIsFileUploadModalOpen(false);
   };

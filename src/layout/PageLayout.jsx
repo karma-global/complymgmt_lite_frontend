@@ -32,7 +32,7 @@ const PageLayout = ({
            }
          };
          fetchNotifications();
-       }, []);
+       }, [SystemUserId, setUnreadCountNotification]);
      if (showNotifications) {
     return <NotificationPage onBack={() => setShowNotifications(false)} />;
   }

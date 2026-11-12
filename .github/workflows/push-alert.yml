@@ -1,0 +1,87 @@
+name: Push alert
+
+# Loud notice for every push to develop (staging) or main (production), in place of branch protection
+# (which this repo doesn't use): who pushed, the commits, and whether it came through a pull request.
+#   PR merged          -> info
+#   direct push        -> 🚨 warning
+#   force push/delete  -> 🔥 failure-level alert
+# Channels: Slack, Teams and/or email, whichever secrets are set (see .github/scripts/notify.sh).
+on:
+  push:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write # GitHub-email fallback (comments on the alerts issue)
+
+jobs:
+  alert:
+    name: Alert
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Describe the push
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCED: ${{ github.event.forced }}
+          DELETED: ${{ github.event.deleted }}
+          PUSHER: ${{ github.event.pusher.name }}
+          COMPARE: ${{ github.event.compare }}
+          COMMITS: ${{ toJSON(github.event.commits) }}
+        run: |
+          branch="$GITHUB_REF_NAME"
+          target=staging; [ "$branch" = main ] && target=production
+
+          commits="$(jq -r '.[] | "• \(.id[0:7]) \(.message | split("\n")[0]) (\(.author.name))"' <<<"$COMMITS")"
+          count="$(jq 'length' <<<"$COMMITS")"
+          [ "$count" -ge 20 ] && commits="$commits"$'\n'"… (GitHub lists at most 20 commits per push)"
+
+          # A merged pull request whose result is this push's head commit
+          pr="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
+                --jq "[.[] | select(.merged_at != null and .base.ref == \"$branch\")][0] // empty | \"#\(.number) \(.title)\"" 2>/dev/null || true)"
+
+          if [ "$DELETED" = true ]; then
+            status=failure; title="🔥 Branch $branch was DELETED by $PUSHER"
+            body="Deploys to $target stop until $branch is restored."
+          elif [ "$FORCED" = true ]; then
+            status=failure; title="🔥 FORCE PUSH to $branch by $PUSHER"
+            body="History on $branch was rewritten; commits may have been removed. Check the compare link."$'\n\n'"$commits"
+          elif [ -n "$pr" ]; then
+            status=info; title="PR $pr merged into $branch by $PUSHER"
+            body="$commits"
+          else
+            status=warning; title="Direct push to $branch by $PUSHER (no pull request)"
+            body="This skipped review and CI."$'\n\n'"$commits"
+          fi
+          when="now"; [ "$target" = production ] && when="once approved"
+          [ "$DELETED" = true ] || body="$body"$'\n\n'"Deploying to $target $when; the result arrives as a separate message."
+
+          {
+            echo "NOTIFY_STATUS=$status"
+            echo "NOTIFY_TITLE=$title"
+            echo "NOTIFY_URL=$COMPARE"
+            delim="EOF_$(openssl rand -hex 8)"   # commit messages can't end the block early
+            echo "NOTIFY_BODY<<$delim"
+            echo "$body"
+            echo "$delim"
+          } >> "$GITHUB_ENV"
+          echo "$title"; echo "$body"
+
+      - name: Send
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          SMTP_URL: ${{ secrets.SMTP_URL }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
+          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
+          # Fallback when none of the above is set: GitHub emails via the alerts issue
+          GH_TOKEN: ${{ github.token }}
+          NOTIFY_GITHUB_MENTIONS: ${{ vars.NOTIFY_GITHUB_MENTIONS }}
+        run: .github/scripts/notify.sh
